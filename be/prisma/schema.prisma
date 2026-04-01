@@ -19,6 +19,10 @@ model User {
   updatedAt     DateTime  @updatedAt
   sessions      Session[]
   accounts      Account[]
+  role      String   @default("requester")
+  
+  machines      Machine[]
+  jobs          Job[]
 
   @@unique([email])
   @@map("user")
@@ -70,4 +74,37 @@ model Verification {
 
   @@index([identifier])
   @@map("verification")
+}
+
+
+model Machine {
+  id           String   @id @default(cuid())
+  ownerId      String
+  cpuTotal     Int
+  memoryTotal  Int
+  gpuTotal     Int
+  status       String   @default("idle")
+
+  owner User @relation(fields: [ownerId], references: [id])
+}
+
+model Job {
+  id              String   @id @default(cuid())
+  requesterId     String
+  ownerId         String?
+  machineId       String?
+
+  repoUrl         String
+  command         String
+  datasetUri      String?
+
+  cpuRequired     Int
+  memoryRequired  Int
+  gpuRequired     Int
+
+  status          String   @default("pending_approval")
+
+  createdAt       DateTime @default(now())
+
+  requester User @relation(fields: [requesterId], references: [id])
 }
