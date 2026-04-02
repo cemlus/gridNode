@@ -8,6 +8,35 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum JobType {
+  notebook
+  video
+}
+
+enum JobStatus {
+  draft
+  pending_approval
+  approved
+  rejected
+  queued
+  assigned
+  running
+  completed
+  failed
+  preempted
+  cancelled
+}
+
+enum ApprovalStatus {
+  pending
+  approved
+  rejected
+}
+
+enum AgentSessionStatus {
+  active
+  revoked
+}
 
 model User {
   id            String    @id
@@ -19,10 +48,12 @@ model User {
   updatedAt     DateTime  @updatedAt
   sessions      Session[]
   accounts      Account[]
-  role      String   @default("requester")
-  
-  machines      Machine[]
-  jobs          Job[]
+  role          String    @default("requester")
+
+  machines         Machine[]
+  jobsRequested    Job[]     @relation("JobRequester")
+  jobsOwned        Job[]     @relation("JobOwner")
+  approvalsDecided Approval[] @relation("ApprovalDecider")
 
   @@unique([email])
   @@map("user")
@@ -76,35 +107,123 @@ model Verification {
   @@map("verification")
 }
 
-
 model Machine {
-  id           String   @id @default(cuid())
-  ownerId      String
-  cpuTotal     Int
-  memoryTotal  Int
-  gpuTotal     Int
-  status       String   @default("idle")
+  id               String    @id @default(cuid())
+  ownerId          String
+  cpuTotal         Int
+  memoryTotal      Int
+  gpuTotal         Int
+  status           String    @default("idle")
+  lastHeartbeatAt  DateTime?
 
-  owner User @relation(fields: [ownerId], references: [id])
+  owner   User           @relation(fields: [ownerId], references: [id])
+  jobs    Job[]
+  sessions AgentSession[]
+
+  @@index([ownerId])
 }
 
 model Job {
-  id              String   @id @default(cuid())
+  id              String     @id @default(cuid())
   requesterId     String
   ownerId         String?
   machineId       String?
 
+  type            JobType    @default(notebook)
   repoUrl         String
-  command         String
+  command         String?
+  notebookPath    String?
   datasetUri      String?
 
   cpuRequired     Int
   memoryRequired  Int
   gpuRequired     Int
 
-  status          String   @default("pending_approval")
+  timeoutSeconds  Int        @default(3600)
 
-  createdAt       DateTime @default(now())
+  status          JobStatus  @default(pending_approval)
 
-  requester User @relation(fields: [requesterId], references: [id])
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  requester User     @relation("JobRequester", fields: [requesterId], references: [id])
+  owner     User?    @relation("JobOwner", fields: [ownerId], references: [id])
+  machine   Machine? @relation(fields: [machineId], references: [id])
+
+  approval  Approval?
+  events    JobEvent[]
+  logs      JobLog[]
+  artifacts Artifact[]
+
+  @@index([requesterId])
+  @@index([status])
+  @@index([machineId])
+}
+
+model Approval {
+  id           String          @id @default(cuid())
+  jobId        String          @unique
+  status       ApprovalStatus  @default(pending)
+  decidedById  String?
+  decidedAt    DateTime?
+  createdAt    DateTime        @default(now())
+
+  job       Job   @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  decidedBy User? @relation("ApprovalDecider", fields: [decidedById], references: [id])
+
+  @@index([status])
+}
+
+model JobEvent {
+  id        String   @id @default(cuid())
+  jobId     String
+  type      String
+  payload   Json?
+  actorId   String?
+  createdAt DateTime @default(now())
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+}
+
+model JobLog {
+  id        String   @id @default(cuid())
+  jobId     String
+  sequence  Int
+  line      String
+  stream    String?
+  createdAt DateTime @default(now())
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, sequence])
+  @@index([jobId, sequence])
+}
+
+model Artifact {
+  id          String   @id @default(cuid())
+  jobId       String
+  filename    String
+  storagePath String
+  mimeType    String?
+  sizeBytes   Int?
+  createdAt   DateTime @default(now())
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+}
+
+model AgentSession {
+  id               String              @id @default(cuid())
+  machineId        String
+  tokenHash        String              @unique
+  status           AgentSessionStatus  @default(active)
+  lastHeartbeatAt  DateTime?
+  createdAt        DateTime            @default(now())
+
+  machine Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+
+  @@index([machineId])
 }
