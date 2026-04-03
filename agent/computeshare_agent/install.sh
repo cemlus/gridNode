@@ -36,6 +36,10 @@ echo ""
 echo "  Creating virtual environment..."
 python3 -m venv ~/.computeshare/venv
 
+echo "  Upgrading core build tools..."
+# ADD THESE TWO LINES
+~/.computeshare/venv/bin/pip install -q --upgrade pip setuptools wheel
+
 echo "  Installing agent..."
 ~/.computeshare/venv/bin/pip install -q --upgrade pip
 ~/.computeshare/venv/bin/pip install -e "$PWD"
