@@ -37,6 +37,8 @@ router.post("/register", async (req, res) => {
       userKey
     } = req.body;
 
+    console.log(req.body)
+
     if (!agent_token) {
       return res.status(400).json({ error: "agent_token is required" });
     }

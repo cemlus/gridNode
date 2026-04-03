@@ -1,0 +1,14 @@
+{
+    "job_id": "string",
+    "type": "ml_notebook" | "video_render",
+    "github_repo": "url",
+    "notebook_path": "path/to/ipynb",  // only for ml_notebook
+    "dataset_url": "url|null",         // optional
+    "dataset_filename": "string",      // optional, defaults to "input"
+    "cpu_request": number,
+    "ram_request_gb": number,
+    "gpu_required": boolean,
+    "gpu_vram_mb": number (optional, default 2048),
+    "timeout_seconds": number,
+    "output_paths": ["string"]  // expected outputs (suggested only)
+}
