@@ -1,5 +1,5 @@
 import { Request, Router } from "express";
-import { JobType, JobStatus, ApprovalStatus, Prisma } from "@prisma/client";
+import { JobType, JobStatus, ApprovalStatus, Prisma, GpuMemoryTier, MemoryTier, CpuTier, DurationTier, GpuVendor } from "@prisma/client";
 import { requireAuth } from "../middleware/requireAuth";
 import { requireAgentAuth } from "../middleware/requireAgentAuth";
 import { prisma } from "../lib/db";
@@ -12,6 +12,17 @@ const router = Router();
 
 function paramId(req: Request): string {
   return String(req.params.id);
+}
+
+function flattenJobCounts(job: any): any {
+  if (job._count) {
+    return {
+      ...job,
+      logsCount: job._count.logs,
+      artifactsCount: job._count.artifacts,
+    };
+  }
+  return job;
 }
 
 function parseLimit(raw: unknown, fallback: number, max: number): number {
@@ -51,7 +62,8 @@ router.get("/", requireAuth, async (req, res) => {
       },
     });
 
-    res.json(jobs);
+    const flattenedJobs = jobs.map(flattenJobCounts);
+    res.json(flattenedJobs);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to list jobs" });
@@ -67,109 +79,116 @@ router.post("/", requireAuth, async (req, res) => {
       type = JobType.notebook,
       repoUrl,
       command,
-      notebookPath,
-      datasetUri,
       kaggleDatasetUrl,
-      cpuRequired,
-      memoryRequired,
-      gpuRequired,
-      gpuMemoryRequired,
-      cpuIntensity,
-      estimatedDuration,
+
+      // ✅ NEW ENUM-BASED INPUTS
+      cpuTier,
+      memoryTier,
+      gpuMemoryTier,
       gpuVendor,
-      timeoutSeconds,
+      estimatedDuration,
+
       machineId,
     } = req.body;
 
+    // ✅ REQUIRED FIELDS
     if (!repoUrl || typeof repoUrl !== "string") {
       return res.status(400).json({ error: "repoUrl is required" });
     }
+
+    if (!command || typeof command !== "string") {
+      return res.status(400).json({ error: "command is required" });
+    }
+
+    if (!cpuTier) {
+      return res.status(400).json({ error: "cpuTier is required" });
+    }
+
+    if (!memoryTier) {
+      return res.status(400).json({ error: "memoryTier is required" });
+    }
+
+    // ✅ Validate enums (important)
+    if (!Object.values(CpuTier).includes(cpuTier)) {
+      return res.status(400).json({ error: "Invalid cpuTier" });
+    }
+
+    if (!Object.values(MemoryTier).includes(memoryTier)) {
+      return res.status(400).json({ error: "Invalid memoryTier" });
+    }
+
     if (
-      cpuRequired == null ||
-      memoryRequired == null ||
-      gpuRequired == null ||
-      typeof cpuRequired !== "number" ||
-      typeof memoryRequired !== "number" ||
-      typeof gpuRequired !== "number"
+      gpuMemoryTier &&
+      !Object.values(GpuMemoryTier).includes(gpuMemoryTier)
     ) {
-      return res.status(400).json({ error: "cpuRequired, memoryRequired, gpuRequired are required" });
+      return res.status(400).json({ error: "Invalid gpuMemoryTier" });
     }
 
-    // Validate GPU requirements if GPU needed
-    if (gpuRequired > 0) {
-      if (gpuMemoryRequired == null || gpuMemoryRequired < 1024) {
-        return res.status(400).json({ error: "gpuMemoryRequired (MB, min 1024) is required when GPU count > 0" });
-      }
-      if (!gpuVendor) {
-        return res.status(400).json({ error: "gpuVendor is required when GPU count > 0" });
-      }
+    if (
+      estimatedDuration &&
+      !Object.values(DurationTier).includes(estimatedDuration)
+    ) {
+      return res.status(400).json({ error: "Invalid estimatedDuration" });
     }
 
-    // Validate cpuIntensity if provided
-    if (cpuIntensity && !Object.values(JobStatus).includes(cpuIntensity)) {
-      // Actually need to check against CpuIntensity enum but JobStatus is wrong. Let's use a simple check
-      const validIntensities = ["low", "medium", "high", "critical"];
-      if (!validIntensities.includes(cpuIntensity)) {
-        return res.status(400).json({ error: "cpuIntensity must be one of: low, medium, high, critical" });
-      }
+    if (
+      gpuVendor &&
+      !Object.values(GpuVendor).includes(gpuVendor)
+    ) {
+      return res.status(400).json({ error: "Invalid gpuVendor" });
     }
 
-    const jobType = type === JobType.video ? JobType.video : JobType.notebook;
-    if (jobType === JobType.notebook && (!notebookPath || typeof notebookPath !== "string")) {
-      return res.status(400).json({ error: "notebookPath is required for notebook jobs" });
-    }
-    if (jobType === JobType.video && (!command || typeof command !== "string" || !command.trim())) {
-      return res.status(400).json({ error: "command is required for video jobs" });
-    }
-
-    // If machineId is provided, set machine and derive owner from machine
+    // ✅ Machine handling
     let jobMachineId: string | null = machineId || null;
     let jobOwnerId: string | null = null;
+
     if (machineId) {
       const machine = await prisma.machine.findUnique({
         where: { id: machineId },
         select: { ownerId: true },
       });
+
       if (!machine) {
-        return res.status(400).json({ error: "Invalid machineId: machine not found" });
+        return res
+          .status(400)
+          .json({ error: "Invalid machineId" });
       }
+
       jobOwnerId = machine.ownerId;
     }
 
+    // ✅ CREATE JOB (NEW STRUCTURE)
     const job = await prisma.job.create({
       data: {
         requesterId: user.id,
-        type: jobType,
+        type,
         repoUrl,
-        command: command ?? null,
-        notebookPath: notebookPath ?? null,
-        datasetUri: datasetUri ?? null,
+        command,
         kaggleDatasetUrl: kaggleDatasetUrl ?? null,
-        cpuRequired,
-        memoryRequired,
-        gpuRequired,
-        gpuMemoryRequired: gpuMemoryRequired ?? null,
-        cpuIntensity: cpuIntensity ?? null,
-        estimatedDuration: estimatedDuration ?? null,
+
+        cpuTier,
+        memoryTier,
+        gpuMemoryTier: gpuMemoryTier ?? null,
         gpuVendor: gpuVendor ?? null,
-        timeoutSeconds:
-          typeof timeoutSeconds === "number" && timeoutSeconds > 0 ? timeoutSeconds : 3600,
+        estimatedDuration: estimatedDuration ?? null,
+
         status: JobStatus.pending_approval,
         machineId: jobMachineId,
         ownerId: jobOwnerId,
+
         approval: {
           create: { status: ApprovalStatus.pending },
         },
+
         events: {
           create: {
             type: "job_created",
             payload: {
-              repoUrl,
-              type: jobType,
-              machineId: jobMachineId,
-              gpuRequired,
-              gpuMemoryRequired,
+              cpuTier,
+              memoryTier,
+              gpuMemoryTier,
               gpuVendor,
+              estimatedDuration,
             } as Prisma.InputJsonValue,
             actorId: user.id,
           },
@@ -177,18 +196,27 @@ router.post("/", requireAuth, async (req, res) => {
       },
       include: {
         approval: true,
-        machine: { select: { id: true, ownerId: true, status: true } },
+        machine: {
+          select: { id: true, ownerId: true, status: true },
+        },
         _count: { select: { logs: true, artifacts: true } },
       },
     });
 
-    emitJobUpdate(job.id, { status: job.status, jobId: job.id });
-    res.status(201).json(job);
+    const flattenedJob = flattenJobCounts(job);
+
+    emitJobUpdate(flattenedJob.id, {
+      status: flattenedJob.status,
+      jobId: flattenedJob.id,
+    });
+
+    res.status(201).json(flattenedJob);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to create job" });
   }
 });
+
 
 // GET /api/jobs/:id/logs
 router.get("/:id/logs", requireAuth, async (req, res) => {

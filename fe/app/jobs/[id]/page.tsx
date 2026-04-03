@@ -10,9 +10,39 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Loader2, ArrowLeft, Play, Square } from "lucide-react";
 import Link from "next/link";
-import { Job, JobLog, JobEvent, JobStatus } from "@/types/api";
+import { Job, JobLog, JobEvent, JobStatus, MemoryTier, GpuMemoryTier, DurationTier } from "@/types/api";
 import StatusBadge from "@/components/StatusBadge";
 import { formatDistanceToNow } from "date-fns";
+
+function formatMemoryTier(tier: MemoryTier): string {
+  return tier.replace("gb", "") + " GB";
+}
+
+function formatGpuMemory(tier: GpuMemoryTier | null): string {
+  if (!tier) return "None";
+  return tier.replace("gb", "") + " GB";
+}
+
+function formatCpuTier(tier: string): string {
+  const labels: Record<string, string> = {
+    light: "Light (2-4 cores)",
+    medium: "Medium (4-8 cores)",
+    heavy: "Heavy (8+ cores)",
+  };
+  return labels[tier] || tier;
+}
+
+function formatDurationTier(tier: DurationTier | null): string {
+  if (!tier) return "";
+  const labels: Record<DurationTier, string> = {
+    lt1h: "< 1 hour",
+    h1_6: "1-6 hours",
+    h6_12: "6-12 hours",
+    h12_24: "12-24 hours",
+    gt24h: "24+ hours",
+  };
+  return labels[tier];
+}
 
 export default function JobDetailPage() {
   const params = useParams();
@@ -196,20 +226,11 @@ export default function JobDetailPage() {
                 {job.repoUrl}
               </a>
             </div>
-            {job.notebookPath && (
-              <div>
-                <span className="font-medium">Notebook Path:</span> {job.notebookPath}
-              </div>
-            )}
+
             {job.command && (
               <div>
                 <span className="font-medium">Command:</span>
                 <code className="ml-2 bg-muted px-2 py-1 rounded text-sm">{job.command}</code>
-              </div>
-            )}
-            {job.datasetUri && (
-              <div>
-                <span className="font-medium">Dataset:</span> {job.datasetUri}
               </div>
             )}
 
@@ -217,45 +238,32 @@ export default function JobDetailPage() {
               <div>
                 <span className="font-medium">Resources:</span>
                 <ul className="text-sm text-muted-foreground list-disc list-inside">
-                  <li>CPU: {job.cpuRequired} cores</li>
-                  <li>Memory: {job.memoryRequired} MB</li>
+                  <li>CPU: {formatCpuTier(job.cpuTier)}</li>
+                  <li>Memory: {formatMemoryTier(job.memoryTier)}</li>
                   <li>
-                    GPU: {job.gpuRequired}
-                    {job.gpuRequired > 0 && job.gpuVendor && (
-                      <span> ({job.gpuVendor}, {job.gpuMemoryRequired}MB per GPU)</span>
+                    GPU: {formatGpuMemory(job.gpuMemoryTier)}
+                    {job.gpuVendor && job.gpuMemoryTier && (
+                      <span> ({job.gpuVendor})</span>
                     )}
                   </li>
-                  {job.cpuIntensity && (
-                    <li>CPU Intensity: <Badge variant="outline" className="capitalize">{job.cpuIntensity}</Badge></li>
-                  )}
                 </ul>
               </div>
               <div>
                 <span className="font-medium">Time Estimates:</span>
                 <ul className="text-sm text-muted-foreground list-disc list-inside">
-                  <li>Timeout: {Math.round(job.timeoutSeconds / 60)} hours</li>
                   {job.estimatedDuration && (
-                    <li>Estimated Duration: {job.estimatedDuration} hours</li>
+                    <li>Estimated Duration: {formatDurationTier(job.estimatedDuration)}</li>
                   )}
                 </ul>
               </div>
             </div>
 
-            {(job.kaggleDatasetUrl || job.datasetUri) && (
+            {job.kaggleDatasetUrl && (
               <div className="pt-2 border-t">
-                <span className="font-medium">Datasets:</span>
-                <ul className="text-sm text-muted-foreground list-disc list-inside mt-1">
-                  {job.datasetUri && (
-                    <li>
-                      Dataset: <code className="bg-muted px-1 rounded">{job.datasetUri}</code>
-                    </li>
-                  )}
-                  {job.kaggleDatasetUrl && (
-                    <li>
-                      Kaggle: <a href={job.kaggleDatasetUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">{job.kaggleDatasetUrl}</a>
-                    </li>
-                  )}
-                </ul>
+                <span className="font-medium">Kaggle Dataset:</span>{" "}
+                <a href={job.kaggleDatasetUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                  {job.kaggleDatasetUrl}
+                </a>
               </div>
             )}
 

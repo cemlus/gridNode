@@ -38,20 +38,6 @@ enum AgentSessionStatus {
   revoked
 }
 
-enum GpuVendor {
-  nvidia
-  amd
-  intel
-  other
-}
-
-enum CpuIntensity {
-  low
-  medium
-  high
-  critical
-}
-
 model User {
   id            String    @id
   name          String
@@ -62,10 +48,10 @@ model User {
   updatedAt     DateTime  @updatedAt
   sessions      Session[]
   accounts      Account[]
-  
+
   machines         Machine[]
-  jobsRequested    Job[]     @relation("JobRequester")
-  jobsOwned        Job[]     @relation("JobOwner")
+  requestedJobs    Job[]     @relation("RequestedJobs")
+  ownedJobs        Job[]     @relation("OwnedJobs")
   approvalsDecided Approval[] @relation("ApprovalDecider")
 
   @@unique([email])
@@ -120,6 +106,12 @@ model Verification {
   @@map("verification")
 }
 
+enum GpuVendor {
+  nvidia
+  amd
+  intel
+}
+
 model Machine {
   id               String    @id @default(cuid())
   ownerId          String
@@ -140,6 +132,36 @@ model Machine {
   @@index([ownerId])
 }
 
+enum CpuTier {
+  light
+  medium 
+  heavy
+}
+
+enum MemoryTier {
+  gb8
+  gb16
+  gb32
+  gb64
+}
+
+enum GpuMemoryTier {
+  gb8
+  gb12
+  gb16
+  gb24
+  gb32
+  gb48
+}
+
+enum DurationTier {
+  lt1h        // <1 hour
+  h1_6        // 1–6 hours
+  h6_12       // 6–12 hours
+  h12_24      // 12–24 hours
+  gt24h       // 24+ hours
+}
+
 model Job {
   id              String     @id @default(cuid())
   requesterId     String
@@ -148,28 +170,22 @@ model Job {
 
   type            JobType    @default(notebook)
   repoUrl         String
-  command         String?
-  notebookPath    String?
-  datasetUri      String?
+  command         String
   kaggleDatasetUrl String?
 
-  cpuRequired     Int
-  memoryRequired  Int
-  gpuRequired     Int
-  gpuMemoryRequired Int?     // Total GPU memory in MB required
-  cpuIntensity    CpuIntensity? // How CPU-intensive the job is
-  estimatedDuration Float?   // Expected duration in hours
+  cpuTier        CpuTier
+  memoryTier     MemoryTier
+  gpuMemoryTier  GpuMemoryTier?    // Total GPU memory in MB required
+  estimatedDuration DurationTier?   // Expected duration in hours
   gpuVendor       GpuVendor?  // Preferred GPU vendor
-
-  timeoutSeconds  Int        @default(3600)
 
   status          JobStatus  @default(pending_approval)
 
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
 
-  requester User     @relation("JobRequester", fields: [requesterId], references: [id])
-  owner     User?    @relation("JobOwner", fields: [ownerId], references: [id])
+  requester User     @relation("RequestedJobs", fields: [requesterId], references: [id])
+  owner     User?    @relation("OwnedJobs", fields: [ownerId], references: [id])
   machine   Machine? @relation(fields: [machineId], references: [id])
 
   approval  Approval?
@@ -178,6 +194,7 @@ model Job {
   artifacts Artifact[]
 
   @@index([requesterId])
+  @@index([ownerId])
   @@index([status])
   @@index([machineId])
 }

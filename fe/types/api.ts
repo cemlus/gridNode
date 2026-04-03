@@ -1,20 +1,13 @@
 export type JobType = "notebook" | "video";
-export type JobStatus =
-  | "draft"
-  | "pending_approval"
-  | "approved"
-  | "rejected"
-  | "queued"
-  | "assigned"
-  | "running"
-  | "completed"
-  | "failed"
-  | "preempted"
-  | "cancelled";
-
+export type JobStatus = "draft" | "pending_approval" | "approved" | "rejected" | "queued" | "assigned" | "running" | "completed" | "failed" | "preempted" | "cancelled";
 export type ApprovalStatus = "pending" | "approved" | "rejected";
-export type GpuVendor = "nvidia" | "amd" | "intel" | "other";
-export type CpuIntensity = "low" | "medium" | "high" | "critical";
+
+// Resource tier enums (matching backend)
+export type CpuTier = "light" | "medium" | "heavy";
+export type MemoryTier = "gb8" | "gb16" | "gb32" | "gb64";
+export type GpuMemoryTier = "gb8" | "gb12" | "gb16" | "gb24" | "gb32" | "gb48";
+export type DurationTier = "lt1h" | "h1_6" | "h6_12" | "h12_24" | "gt24h";
+export type GpuVendor = "nvidia" | "amd" | "intel";
 
 export interface User {
   id: string;
@@ -83,23 +76,23 @@ export interface Job {
   type: JobType;
   repoUrl: string;
   command: string | null;
-  notebookPath: string | null;
-  datasetUri: string | null;
   kaggleDatasetUrl: string | null;
-  cpuRequired: number;
-  memoryRequired: number;
-  gpuRequired: number;
-  gpuMemoryRequired: number | null;
-  cpuIntensity: CpuIntensity | null;
-  estimatedDuration: number | null;
+
+  // Resource requirements (tiers)
+  cpuTier: CpuTier;
+  memoryTier: MemoryTier;
+  gpuMemoryTier: GpuMemoryTier | null;
+  estimatedDuration: DurationTier | null;
   gpuVendor: GpuVendor | null;
-  timeoutSeconds: number;
+
   status: JobStatus;
   requesterId: string;
+  requester?: User; // Included when query includes requester details
   ownerId: string | null;
   machineId: string | null;
   createdAt: string;
   updatedAt: string;
+
   approval: Approval | null;
   machine: Machine | null;
   logsCount: number;
@@ -114,6 +107,30 @@ export interface PaginatedLogs {
 
 export interface MachineRegisterResponse extends Machine {
   sessionToken: string;
+}
+
+// Input types for API calls
+export interface CreateJobInput {
+  type: JobType;
+  repoUrl: string;
+  command: string;
+  kaggleDatasetUrl?: string | null;
+
+  cpuTier: CpuTier;
+  memoryTier: MemoryTier;
+  gpuMemoryTier?: GpuMemoryTier | null;
+  gpuVendor?: GpuVendor | null;
+  estimatedDuration?: DurationTier | null;
+
+  machineId?: string | null;
+}
+
+export interface RegisterMachineInput {
+  cpuTotal: number;
+  memoryTotal: number;
+  gpuTotal: number;
+  gpuVendor?: GpuVendor;
+  gpuMemoryTotal?: number;
 }
 
 // API Response wrapper

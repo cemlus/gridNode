@@ -12,6 +12,36 @@ import { Approval, Job } from "@/types/api";
 import StatusBadge from "@/components/StatusBadge";
 import { formatDistanceToNow } from "date-fns";
 
+function formatMemoryTier(tier: string): string {
+  return tier.replace("gb", "") + " GB";
+}
+
+function formatGpuMemory(tier: string | null): string {
+  if (!tier) return "None";
+  return tier.replace("gb", "") + " GB";
+}
+
+function formatCpuTier(tier: string): string {
+  const labels: Record<string, string> = {
+    light: "Light (2-4 cores)",
+    medium: "Medium (4-8 cores)",
+    heavy: "Heavy (8+ cores)",
+  };
+  return labels[tier] || tier;
+}
+
+function formatDurationTier(tier: string | null): string {
+  if (!tier) return "";
+  const labels: Record<string, string> = {
+    lt1h: "< 1 hour",
+    h1_6: "1-6 hours",
+    h6_12: "6-12 hours",
+    h12_24: "12-24 hours",
+    gt24h: "24+ hours",
+  };
+  return labels[tier] || tier;
+}
+
 export default function ApprovalsPage() {
   const router = useRouter();
   const { data: session, isPending } = authClient.useSession();
@@ -149,7 +179,7 @@ export default function ApprovalsPage() {
                   <div>
                     <CardTitle className="capitalize">{approval.job.type} Job</CardTitle>
                     <CardDescription className="mt-1">
-                      Submitted by {approval.job.requesterId} •{" "}
+                      Submitted by {approval.job.requester.name || approval.job.requester.email} •{" "}
                       {formatDistanceToNow(new Date(approval.createdAt), { addSuffix: true })}
                     </CardDescription>
                   </div>
@@ -164,12 +194,6 @@ export default function ApprovalsPage() {
                   </a>
                 </div>
 
-                {approval.job.notebookPath && (
-                  <div>
-                    <span className="font-medium">Notebook:</span> {approval.job.notebookPath}
-                  </div>
-                )}
-
                 {approval.job.command && (
                   <div>
                     <span className="font-medium">Command:</span>{" "}
@@ -179,37 +203,23 @@ export default function ApprovalsPage() {
 
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                   <div>
-                    <span className="text-muted-foreground">CPU:</span> {approval.job.cpuRequired} cores
+                    <span className="text-muted-foreground">CPU:</span> {formatCpuTier(approval.job.cpuTier)}
                   </div>
                   <div>
-                    <span className="text-muted-foreground">RAM:</span> {approval.job.memoryRequired} MB
+                    <span className="text-muted-foreground">RAM:</span> {formatMemoryTier(approval.job.memoryTier)}
                   </div>
                   <div>
-                    <span className="text-muted-foreground">GPU:</span> {approval.job.gpuRequired}
-                    {approval.job.gpuRequired > 0 && approval.job.gpuVendor && (
-                      <span> ({approval.job.gpuVendor}, {approval.job.gpuMemoryRequired}MB)</span>
+                    <span className="text-muted-foreground">GPU:</span> {formatGpuMemory(approval.job.gpuMemoryTier)}
+                    {approval.job.gpuVendor && approval.job.gpuMemoryTier && (
+                      <span> ({approval.job.gpuVendor})</span>
                     )}
                   </div>
-                  <div>
-                    <span className="text-muted-foreground">Timeout:</span> {Math.round(approval.job.timeoutSeconds / 60)}h
-                  </div>
+                  {approval.job.estimatedDuration && (
+                    <div>
+                      <span className="text-muted-foreground">Duration:</span> {formatDurationTier(approval.job.estimatedDuration)}
+                    </div>
+                  )}
                 </div>
-
-                {(approval.job.cpuIntensity || approval.job.estimatedDuration) && (
-                  <div className="grid grid-cols-2 gap-4 text-sm pt-2 border-t">
-                    {approval.job.cpuIntensity && (
-                      <div>
-                        <span className="text-muted-foreground">CPU Intensity:</span>{" "}
-                        <Badge variant="outline" className="capitalize">{approval.job.cpuIntensity}</Badge>
-                      </div>
-                    )}
-                    {approval.job.estimatedDuration && (
-                      <div>
-                        <span className="text-muted-foreground">Est. Duration:</span> {approval.job.estimatedDuration}h
-                      </div>
-                    )}
-                  </div>
-                )}
 
                 {approval.job.kaggleDatasetUrl && (
                   <div className="text-sm pt-2 border-t">
@@ -220,9 +230,9 @@ export default function ApprovalsPage() {
                   </div>
                 )}
 
-                {approval.job.datasetUri && (
-                  <div className="text-sm">
-                    <span className="font-medium">Dataset:</span> {approval.job.datasetUri}
+                {approval.job.machine && (
+                  <div className="text-sm pt-2 border-t">
+                    <span className="font-medium">Target Machine:</span> {approval.job.machine.id} ({approval.job.machine.status})
                   </div>
                 )}
               </CardContent>

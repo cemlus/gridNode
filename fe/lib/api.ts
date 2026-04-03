@@ -1,4 +1,17 @@
-import type { User, Job, Machine, Approval, JobLog, Artifact, JobEvent, ApiResponse, MachineRegisterResponse, PaginatedLogs } from "@/types/api";
+import type {
+  User,
+  Job,
+  Machine,
+  Approval,
+  JobLog,
+  Artifact,
+  JobEvent,
+  ApiResponse,
+  MachineRegisterResponse,
+  PaginatedLogs,
+  CreateJobInput,
+  RegisterMachineInput,
+} from "@/types/api";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3005";
 
@@ -33,13 +46,7 @@ export async function getCurrentUser(): Promise<User> {
 }
 
 // Machines
-export async function registerMachine(data: {
-  cpuTotal: number;
-  memoryTotal: number;
-  gpuTotal: number;
-  gpuVendor?: "nvidia" | "amd" | "intel" | "other";
-  gpuMemoryTotal?: number;
-}): Promise<MachineRegisterResponse> {
+export async function registerMachine(data: RegisterMachineInput): Promise<MachineRegisterResponse> {
   return fetchApi<MachineRegisterResponse>("/api/machines/register", {
     method: "POST",
     body: JSON.stringify(data),
@@ -71,23 +78,7 @@ export async function getJob(id: string): Promise<Job> {
   return fetchApi<Job>(`/api/jobs/${id}`);
 }
 
-export async function createJob(data: {
-  type: "notebook" | "video";
-  repoUrl: string;
-  command?: string;
-  notebookPath?: string;
-  datasetUri?: string;
-  kaggleDatasetUrl?: string;
-  cpuRequired: number;
-  memoryRequired: number;
-  gpuRequired: number;
-  gpuMemoryRequired?: number;
-  gpuVendor?: "nvidia" | "amd" | "intel" | "other";
-  cpuIntensity?: "low" | "medium" | "high" | "critical";
-  estimatedDuration?: number;
-  machineId: string;
-  timeoutSeconds?: number;
-}): Promise<Job> {
+export async function createJob(data: CreateJobInput): Promise<Job> {
   return fetchApi<Job>("/api/jobs", {
     method: "POST",
     body: JSON.stringify(data),

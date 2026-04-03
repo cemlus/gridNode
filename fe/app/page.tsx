@@ -10,13 +10,43 @@ import { Loader2, Briefcase, CheckSquare, Monitor, Plus } from "lucide-react";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 import StatusBadge from "@/components/StatusBadge";
+import type { Job, MemoryTier, GpuMemoryTier, DurationTier } from "@/types/api";
+
+function formatMemoryTier(tier: MemoryTier): string {
+  return tier.replace("gb", "") + " GB";
+}
+
+function formatGpuMemory(tier: GpuMemoryTier | null): string {
+  if (!tier) return "None";
+  return tier.replace("gb", "") + " GB";
+}
+
+function formatCpuTier(tier: string): string {
+  const labels: Record<string, string> = {
+    light: "Light (2-4 cores)",
+    medium: "Medium (4-8 cores)",
+    heavy: "Heavy (8+ cores)",
+  };
+  return labels[tier] || tier;
+}
+
+function formatDurationTier(tier: DurationTier | null): string {
+  if (!tier) return "";
+  const labels: Record<DurationTier, string> = {
+    lt1h: "< 1 hour",
+    h1_6: "1-6 hours",
+    h6_12: "6-12 hours",
+    h12_24: "12-24 hours",
+    gt24h: "24+ hours",
+  };
+  return labels[tier];
+}
 
 export default function Dashboard() {
   const { data: session, isPending } = authClient.useSession();
   const router = useRouter();
   const [stats, setStats] = useState<{ jobs: number; pendingApprovals: number; machines: number }>({ jobs: 0, pendingApprovals: 0, machines: 0 });
-  const [machineCount, setMachineCount] = useState<number>(0);
-  const [jobs, setJobs] = useState<any[]>([]);
+  const [jobs, setJobs] = useState<Job[]>([]);
 
   useEffect(() => {
     if (!isPending && !session) {
@@ -26,22 +56,9 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (session) {
-      fetchUserInfo();
       fetchJobs();
     }
   }, [session]);
-
-  const fetchUserInfo = async () => {
-    try {
-      const res = await fetch("http://localhost:3005/api/check/me", { credentials: "include" });
-      if (res.ok) {
-        const user = await res.json();
-        setMachineCount(user.machineCount || 0);
-      }
-    } catch (e) {
-      console.error("Failed to fetch user info", e);
-    }
-  };
 
   const fetchJobs = async () => {
     try {
@@ -58,7 +75,6 @@ export default function Dashboard() {
   const pendingApprovalsCount = jobs.filter((j) => j.status === "pending_approval").length;
 
   // Derive primary role for display based on machine ownership
-  const primaryRole = machineCount > 0 ? "owner" : "requester";
 
   if (isPending) {
     return (
@@ -80,8 +96,6 @@ export default function Dashboard() {
           <h1 className="text-3xl font-bold">Dashboard</h1>
           <div className="text-muted-foreground">
             Welcome back, {session.user.name}
-            <Badge variant="outline" className="ml-2 capitalize">{primaryRole}</Badge>
-            <span className="ml-2 text-xs text-muted-foreground">Machines: {machineCount}</span>
           </div>
         </div>
       </div>
@@ -105,9 +119,6 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{pendingApprovalsCount}</div>
-            <p className="text-xs text-muted-foreground">
-              {primaryRole === "owner" || primaryRole === "admin" ? "Requires your action" : "Waiting for owner"}
-            </p>
           </CardContent>
         </Card>
 
@@ -117,7 +128,6 @@ export default function Dashboard() {
             <Monitor className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{machineCount}</div>
             <p className="text-xs text-muted-foreground">View in Machines page</p>
           </CardContent>
         </Card>
@@ -164,35 +174,23 @@ export default function Dashboard() {
                 <CardContent className="space-y-2">
                   <div className="grid grid-cols-2 gap-2 text-sm">
                     <div>
-                      <span className="text-muted-foreground">CPU:</span> {job.cpuRequired} cores
+                      <span className="text-muted-foreground">CPU:</span> {formatCpuTier(job.cpuTier)}
                     </div>
                     <div>
-                      <span className="text-muted-foreground">RAM:</span> {job.memoryRequired} MB
+                      <span className="text-muted-foreground">RAM:</span> {formatMemoryTier(job.memoryTier)}
                     </div>
                     <div>
-                      <span className="text-muted-foreground">GPU:</span> {job.gpuRequired}
-                      {job.gpuRequired > 0 && job.gpuVendor && (
-                        <span className="text-xs block text-muted-foreground">
-                          {job.gpuVendor} ({job.gpuMemoryRequired}MB)
-                        </span>
+                      <span className="text-muted-foreground">GPU:</span> {formatGpuMemory(job.gpuMemoryTier)}
+                      {job.gpuVendor && job.gpuMemoryTier && (
+                        <span className="text-xs block text-muted-foreground">{job.gpuVendor}</span>
                       )}
                     </div>
-                    <div>
-                      <span className="text-muted-foreground">Timeout:</span> {Math.round(job.timeoutSeconds / 60)}h
-                    </div>
+                    {job.estimatedDuration && (
+                      <div>
+                        <span className="text-muted-foreground">Duration:</span> {formatDurationTier(job.estimatedDuration)}
+                      </div>
+                    )}
                   </div>
-
-                  {job.cpuIntensity && (
-                    <p className="text-sm">
-                      <span className="text-muted-foreground">Intensity:</span> <Badge variant="outline" className="capitalize text-xs">{job.cpuIntensity}</Badge>
-                    </p>
-                  )}
-
-                  {job.notebookPath && (
-                    <p className="text-sm">
-                      <span className="text-muted-foreground">Notebook:</span> {job.notebookPath}
-                    </p>
-                  )}
 
                   {job.command && (
                     <p className="text-sm">
