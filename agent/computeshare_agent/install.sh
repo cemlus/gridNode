@@ -38,8 +38,7 @@ python3 -m venv ~/.computeshare/venv
 
 echo "  Installing agent..."
 ~/.computeshare/venv/bin/pip install -q --upgrade pip
-~/.computeshare/venv/bin/pip install -q git+https://github.com/mehul79/gridNode/tree/main/agent/computeshare_agent.git
-
+~/.computeshare/venv/bin/pip install -e ./agent/computeshare_agent
 # Create a launcher script in /usr/local/bin
 echo "  Creating launcher..."
 sudo tee /usr/local/bin/computeshare-agent > /dev/null <<EOF
