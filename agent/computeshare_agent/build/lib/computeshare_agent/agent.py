@@ -55,7 +55,7 @@ def register(token):
 
     cfg = {
         "machine_id":   data["machine_id"],
-        "agent_token":  token,
+        "agent_token":  data["agent_token"],
         "backend_url":  BACKEND_URL,
     }
     config.save(cfg)
@@ -132,7 +132,7 @@ def report_status(job_id, status, reason=None, allocation=None):
 
 def execute_job(job):
     global _current_container
-    job_id = job["job_id"]
+    job_id = job["id"]
     ws = None
 
     print(f"\n{'─'*50}")
@@ -158,10 +158,10 @@ def execute_job(job):
 
         # 2. prepare workspace
         ws = workspace.create(job_id)
-        workspace.clone_repo(job["github_repo"], ws)
+        workspace.clone_repo(job["repoUrl"], ws)
 
-        if job.get("dataset_url"):
-            workspace.download_file(job["dataset_url"], ws, job.get("dataset_filename", "input"))
+        if job.get("kaggleDatasetUrl"):
+            workspace.download_file(job["kaggleDatasetUrl"], ws, job.get("dataset_filename", "input"))
 
         # 3. run Docker container
         _reclaim_flag.clear()
@@ -283,7 +283,7 @@ def main():
         AUTH_HEADERS = {"Authorization": f"Bearer {token}"}
         cfg = register(token)
         MACHINE_ID = cfg["machine_id"]
-        AUTH_HEADERS = {"Authorization": f"Bearer {token}"}
+        AUTH_HEADERS = {"Authorization": f"Bearer {cfg['agent_token']}"}
 
     run_agent()
 

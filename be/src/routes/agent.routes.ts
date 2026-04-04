@@ -117,10 +117,50 @@ router.post("/machines/:id/heartbeat", requireAgentAuth, async (req, res) => {
   }
 });
 
-// TODO: Add other agent endpoints:
-// GET /api/agent/jobs/next
-// PATCH /api/agent/jobs/:id/status
-// POST /api/agent/jobs/:id/logs
-// POST /api/agent/jobs/:id/artifacts
+// GET /api/agent/jobs/next — agent polls for a job
+router.get("/jobs/next", requireAgentAuth, async (req, res) => {
+  try {
+    const agentSession = (req as any).agentSession;
+    
+    // Find a job that is 'approved' or 'queued'
+    // For now, we'll just take the oldest one. 
+    // In a real system, we'd match machine specs (CPU/RAM tiers) here.
+    const job = await prisma.job.findFirst({
+      where: {
+        status: { in: ["approved", "queued"] as any },
+        OR: [
+          { machineId: null },
+          { machineId: agentSession.machineId }
+        ]
+      },
+      orderBy: { createdAt: "asc" },
+      include: {
+        requester: { select: { name: true, email: true } }
+      }
+    });
+
+    if (!job) {
+      return res.status(204).end();
+    }
+
+    // Assign job to this machine and set status to 'assigned'
+    const updatedJob = await prisma.job.update({
+      where: { id: job.id },
+      data: {
+        status: "assigned",
+        machineId: agentSession.machineId
+      }
+    });
+
+    res.json({ job: updatedJob });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to fetch next job" });
+  }
+});
+
+// PATCH /api/jobs/:id/status — agent reports job status change
+// We put this in jobs.routes.ts or agent.routes.ts? The agent.py uses /api/jobs/:id/status.
+// Let's add it to jobs.routes.ts to match the agent's expected path.
 
 export default router;

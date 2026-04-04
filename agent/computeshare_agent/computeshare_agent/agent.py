@@ -40,7 +40,10 @@ def register(token):
         "ram_gb":      res["ram"]["total_gb"],
         "gpu":         res["gpu"],
         "disk_free_gb": res["disk"]["free_gb"],
+        "userKey":      token
     }
+
+    print(payload)
 
     resp = requests.post(
         f"{BACKEND_URL}/api/machines/register",
@@ -52,7 +55,7 @@ def register(token):
 
     cfg = {
         "machine_id":   data["machine_id"],
-        "agent_token":  token,
+        "agent_token":  data["agent_token"],
         "backend_url":  BACKEND_URL,
     }
     config.save(cfg)
@@ -95,6 +98,7 @@ def heartbeat_loop():
 # ── job polling ───────────────────────────────────────────────────────────────
 
 def fetch_job():
+    # print(".", end="", flush=True) # Optional: dots for less noise
     resp = requests.get(
         f"{BACKEND_URL}/api/agent/jobs/next",
         headers=headers(),
@@ -103,6 +107,7 @@ def fetch_job():
     if resp.status_code == 204:
         return None
     resp.raise_for_status()
+    print("\n  [INFO] Job found!")
     return resp.json().get("job")
 
 
@@ -129,7 +134,7 @@ def report_status(job_id, status, reason=None, allocation=None):
 
 def execute_job(job):
     global _current_container
-    job_id = job["job_id"]
+    job_id = job["id"]
     ws = None
 
     print(f"\n{'─'*50}")
@@ -155,10 +160,10 @@ def execute_job(job):
 
         # 2. prepare workspace
         ws = workspace.create(job_id)
-        workspace.clone_repo(job["github_repo"], ws)
+        workspace.clone_repo(job["repoUrl"], ws)
 
-        if job.get("dataset_url"):
-            workspace.download_file(job["dataset_url"], ws, job.get("dataset_filename", "input"))
+        if job.get("kaggleDatasetUrl"):
+            workspace.download_file(job["kaggleDatasetUrl"], ws, job.get("dataset_filename", "input"))
 
         # 3. run Docker container
         _reclaim_flag.clear()
@@ -255,7 +260,7 @@ def main():
 
     start_cmd = sub.add_parser("start", help="Start the agent")
     start_cmd.add_argument("--token",   help="Owner token from dashboard (first run only)")
-    start_cmd.add_argument("--backend", default="https://your-platform.com")
+    start_cmd.add_argument("--backend", default="http://localhost:8000")
 
     sub.add_parser("reset", help="Clear saved config and re-register")
 
@@ -268,7 +273,7 @@ def main():
 
     # default to start
     global BACKEND_URL, AUTH_HEADERS, MACHINE_ID
-    backend = getattr(args, "backend", "https://your-platform.com")
+    backend = getattr(args, "backend", "http://localhost:8000")
     token   = getattr(args, "token", None)
 
     BACKEND_URL = backend
@@ -280,7 +285,7 @@ def main():
         AUTH_HEADERS = {"Authorization": f"Bearer {token}"}
         cfg = register(token)
         MACHINE_ID = cfg["machine_id"]
-        AUTH_HEADERS = {"Authorization": f"Bearer {token}"}
+        AUTH_HEADERS = {"Authorization": f"Bearer {cfg['agent_token']}"}
 
     run_agent()
 
@@ -311,7 +316,7 @@ ComputeShare Agent
   Registered as machine: machine_a3f9
 
 Machine ID : machine_a3f9
-Backend    : https://your-platform.com
+Backend    : http://localhost:8000
 
 Heartbeat started. Waiting for jobs...
 

@@ -9,7 +9,7 @@ export async function canViewJob(
   job: JobWithMachineOwner
 ): Promise<boolean> {
   if (job.requesterId === userId) return true;
-  if (job.ownerId && job.ownerId === userId) return true;
+  if (job.providerId && job.providerId === userId) return true;
   if (job.machineId) {
     const ownerId =
       job.machine?.ownerId ??
@@ -25,7 +25,7 @@ export async function canStopJob(
   job: JobWithMachineOwner
 ): Promise<boolean> {
   if (job.requesterId === userId) return true;
-  if (job.ownerId && job.ownerId === userId) return true;
+  if (job.providerId && job.providerId === userId) return true;
   if (job.machineId) {
     const ownerId =
       job.machine?.ownerId ??

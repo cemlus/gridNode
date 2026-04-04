@@ -1,4 +1,3 @@
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -52,7 +51,8 @@ model User {
 
   machines         Machine[]
   requestedJobs    Job[]     @relation("RequestedJobs")
-  ownedJobs        Job[]     @relation("OwnedJobs")
+  providedJobs     Job[]     @relation("ProvidedJobs")
+  decisionsMade    Job[]     @relation("JobDecider")
   approvalsDecided Approval[] @relation("ApprovalDecider")
 
   @@unique([email])
@@ -168,8 +168,9 @@ enum DurationTier {
 model Job {
   id              String     @id @default(cuid())
   requesterId     String
-  ownerId         String?
+  providerId      String?    // The user providing the machine
   machineId       String?
+  decidedById     String?    // The user who approved/rejected the job
 
   type            JobType    @default(notebook)
   repoUrl         String
@@ -188,7 +189,8 @@ model Job {
   updatedAt       DateTime   @updatedAt
 
   requester User     @relation("RequestedJobs", fields: [requesterId], references: [id])
-  owner     User?    @relation("OwnedJobs", fields: [ownerId], references: [id])
+  provider  User?    @relation("ProvidedJobs", fields: [providerId], references: [id])
+  decidedBy User?    @relation("JobDecider", fields: [decidedById], references: [id])
   machine   Machine? @relation(fields: [machineId], references: [id])
 
   approval  Approval?
@@ -197,7 +199,7 @@ model Job {
   artifacts Artifact[]
 
   @@index([requesterId])
-  @@index([ownerId])
+  @@index([providerId])
   @@index([status])
   @@index([machineId])
 }

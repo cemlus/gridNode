@@ -31,14 +31,31 @@ if ! command -v docker &>/dev/null; then
 fi
 echo "  Docker ... OK"
 
-# Create virtualenv
-echo ""
+# # Create virtualenv
+# echo ""
+# echo "  Creating virtual environment..."
+# python3 -m venv ~/.computeshare/venv
+
+# echo "  Upgrading core build tools..."
+# # ADD THESE TWO LINES
+# ~/.computeshare/venv/bin/pip install -q --upgrade pip setuptools wheel
+
+# echo "  Installing agent..."
+# ~/.computeshare/venv/bin/pip install -q --upgrade pip
+# ~/.computeshare/venv/bin/pip install -e "$PWD"
+
+# Create virtualenv with clear-on-start to ensure no old files remain
 echo "  Creating virtual environment..."
-python3 -m venv ~/.computeshare/venv
+python3 -m venv --clear ~/.computeshare/venv
+
+echo "  Upgrading core build tools..."
+# We use --no-cache-dir to ensure we aren't pulling a buggy cached version
+~/.computeshare/venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel
 
 echo "  Installing agent..."
-~/.computeshare/venv/bin/pip install -q --upgrade pip
-~/.computeshare/venv/bin/pip install -q git+https://github.com/mehul79/gridNode/tree/main/agent/computeshare_agent.git
+# Try a regular install first (no -e) to verify the pyproject.toml is valid
+~/.computeshare/venv/bin/pip install "$PWD"
+
 
 # Create a launcher script in /usr/local/bin
 echo "  Creating launcher..."

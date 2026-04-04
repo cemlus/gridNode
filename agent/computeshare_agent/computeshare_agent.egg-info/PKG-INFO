@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: computeshare-agent
+Version: 0.1.0
+Summary: ComputeShare owner-side agent for distributed compute sharing
+Requires-Python: >=3.9
+Requires-Dist: requests>=2.31.0
+Requires-Dist: psutil>=5.9.0
+Requires-Dist: GitPython>=3.1.0
+Requires-Dist: tqdm>=4.66.0

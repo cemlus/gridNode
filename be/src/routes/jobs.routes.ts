@@ -10,6 +10,12 @@ import { emitLog, emitJobUpdate } from "../sockets";
 
 const router = Router();
 
+const CPU_MAP: Record<string, number> = { light: 1, medium: 2, heavy: 4 };
+const MEM_MAP: Record<string, number> = { gb8: 8192, gb16: 16384, gb32: 32768, gb64: 65536 };
+const GPU_MEM_MAP: Record<string, number> = { 
+  gb8: 8192, gb12: 12288, gb16: 16384, gb24: 24576, gb32: 32768, gb48: 49152 
+};
+
 function paramId(req: Request): string {
   return String(req.params.id);
 }
@@ -43,20 +49,37 @@ router.get("/", requireAuth, async (req, res) => {
         : undefined
       : undefined;
 
-    // Users can view jobs where they are the requester, owner, or machine owner
-    const where: Prisma.JobWhereInput = {
-      OR: [
-        { requesterId: user.id },
-        { ownerId: user.id },
-        { machine: { ownerId: user.id } },
-      ],
-    };
+    const roleParam = req.query.role as string | undefined;
+
+    // Default: Show jobs I requested
+    // If role=provider: Show jobs I am hosting
+    let where: Prisma.JobWhereInput = { requesterId: user.id };
+
+    if (roleParam === "provider") {
+      where = { 
+        OR: [
+          { providerId: user.id },
+          { machine: { ownerId: user.id } }
+        ]
+      };
+    } else if (roleParam === "all") {
+      where = {
+        OR: [
+          { requesterId: user.id },
+          { providerId: user.id },
+          { machine: { ownerId: user.id } },
+        ],
+      };
+    }
 
     const jobs = await prisma.job.findMany({
       where: statusFilter ? { AND: [where, { status: statusFilter }] } : where,
       orderBy: { createdAt: "desc" },
       include: {
         approval: true,
+        requester: { select: { id: true, name: true, image: true } },
+        provider: { select: { id: true, name: true, image: true } },
+        decidedBy: { select: { id: true, name: true } },
         machine: { select: { id: true, ownerId: true, status: true } },
         _count: { select: { logs: true, artifacts: true } },
       },
@@ -138,26 +161,39 @@ router.post("/", requireAuth, async (req, res) => {
       return res.status(400).json({ error: "Invalid gpuVendor" });
     }
 
-    // ✅ Machine handling
-    let jobMachineId: string | null = machineId || null;
-    let jobOwnerId: string | null = null;
+    // ✅ STRICT AUTOMATIC MATCHMAKING
+    // 1. Define minimum requirements based on tiers
+    const minCpu = CPU_MAP[cpuTier as string] || 1;
+    const minRam = MEM_MAP[memoryTier as string] || 8192;
+    const minGpuMem = gpuMemoryTier ? (GPU_MEM_MAP[gpuMemoryTier as string] || 0) : 0;
 
-    if (machineId) {
-      const machine = await prisma.machine.findUnique({
-        where: { id: machineId },
-        select: { ownerId: true },
+    // 2. Find the first suitable machine
+    // - Not owned by the requester
+    // - Matches or exceeds CPU, RAM, and GPU specs
+    const matchedMachine = await prisma.machine.findFirst({
+      where: {
+        ownerId: { not: user.id },
+        cpuTotal: { gte: minCpu },
+        memoryTotal: { gte: minRam },
+        ...(gpuMemoryTier ? {
+          gpuTotal: { gte: 1 },
+          gpuMemoryTotal: { gte: minGpuMem },
+          ...(gpuVendor ? { gpuVendor } : {})
+        } : {})
+      },
+      select: { id: true, ownerId: true }
+    });
+
+    if (!matchedMachine) {
+      return res.status(404).json({ 
+        error: "No suitable machines currently online to handle this job. Try lower resource requirements." 
       });
-
-      if (!machine) {
-        return res
-          .status(400)
-          .json({ error: "Invalid machineId" });
-      }
-
-      jobOwnerId = machine.ownerId;
     }
 
-    // ✅ CREATE JOB (NEW STRUCTURE)
+    const jobMachineId = matchedMachine.id;
+    const jobProviderId = matchedMachine.ownerId;
+
+    // ✅ CREATE JOB
     const job = await prisma.job.create({
       data: {
         requesterId: user.id,
@@ -174,7 +210,7 @@ router.post("/", requireAuth, async (req, res) => {
 
         status: JobStatus.pending_approval,
         machineId: jobMachineId,
-        ownerId: jobOwnerId,
+        providerId: jobProviderId,
 
         approval: {
           create: { status: ApprovalStatus.pending },
@@ -189,6 +225,7 @@ router.post("/", requireAuth, async (req, res) => {
               gpuMemoryTier,
               gpuVendor,
               estimatedDuration,
+              matchedMachineId: jobMachineId
             } as Prisma.InputJsonValue,
             actorId: user.id,
           },
@@ -422,6 +459,47 @@ router.post("/:id/stop", requireAuth, async (req, res) => {
   }
 });
 
+// PATCH /api/jobs/:id/status — agent
+router.patch("/:id/status", requireAgentAuth, async (req, res) => {
+  try {
+    const jobId = paramId(req);
+    const agentSession = (req as any).agentSession;
+    const { status, reason, actual_allocation } = req.body as {
+      status: JobStatus;
+      reason?: string;
+      actual_allocation?: any;
+    };
+
+    const job = await prisma.job.findUnique({ where: { id: jobId } });
+    if (!job) return res.status(404).json({ error: "Job not found" });
+    if (job.machineId !== agentSession.machineId) {
+      return res.status(403).json({ error: "Job not assigned to this machine" });
+    }
+
+    if (!Object.values(JobStatus).includes(status)) {
+      return res.status(400).json({ error: "Invalid status" });
+    }
+
+    const updated = await prisma.job.update({
+      where: { id: jobId },
+      data: { status },
+    });
+
+    await appendJobEvent(
+      jobId,
+      "status_changed",
+      { status, reason, actual_allocation } as Prisma.InputJsonValue,
+      null // actor is agent
+    );
+
+    emitJobUpdate(jobId, { status: updated.status, jobId });
+    res.json(updated);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to update job status" });
+  }
+});
+
 // GET /api/jobs/:id
 router.get("/:id", requireAuth, async (req, res) => {
   try {
@@ -432,6 +510,9 @@ router.get("/:id", requireAuth, async (req, res) => {
       where: { id },
       include: {
         approval: true,
+        requester: { select: { id: true, name: true, image: true, email: true } },
+        provider: { select: { id: true, name: true, image: true, email: true } },
+        decidedBy: { select: { id: true, name: true } },
         machine: { select: { id: true, ownerId: true, status: true, lastHeartbeatAt: true } },
         events: { orderBy: { createdAt: "desc" }, take: 50 },
         _count: { select: { logs: true, artifacts: true } },
