@@ -162,8 +162,14 @@ def execute_job(job):
         ws = workspace.create(job_id)
         workspace.clone_repo(job["repoUrl"], ws)
 
-        if job.get("kaggleDatasetUrl"):
-            workspace.download_file(job["kaggleDatasetUrl"], ws, job.get("dataset_filename", "input"))
+        if job.get("dataset_url"):
+            workspace.download_file(
+                url          = job["dataset_url"],
+                workspace    = ws,
+                filename     = job.get("dataset_filename", "input"),
+                backend_url  = BACKEND_URL,      # needed for Kaggle credential fetch
+                agent_headers= headers()         # auth headers for the credential endpoint
+            )
 
         # 3. run Docker container
         _reclaim_flag.clear()
