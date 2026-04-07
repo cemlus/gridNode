@@ -3,15 +3,55 @@
 import subprocess
 import shlex
 
-
 MIN_VIABLE_CPU_CORES = 0.5
 MIN_VIABLE_RAM_GB    = 0.5
 GPU_VRAM_HEADROOM_MB = 512
 
-IMAGES = {
-    "notebook": "jupyter/scipy-notebook:latest",
-    "video": "jrottenberg/ffmpeg:4.4-ubuntu",
+IMAGE_REGISTRY = {
+    "ml_notebook": {
+        "image":      "siddhantbh/gridnode-ml-base:latest",
+        "gpu_image":  "siddhantbh/gridnode-ml-gpu:latest",   # used if job requests GPU
+        "network":    "none",                      # no internet needed
+        "entrypoint": None,                        # use image default
+    },
+    "video_render": {
+        "image":      "siddhantbh/gridnode-video:latest",
+        "gpu_image":  None,                        # no GPU variant for video
+        "network":    "none",
+        "entrypoint": None,
+    },
+    "server_run": {
+        "image":      "siddhantbh/gridnode-server-runner:latest",
+        "gpu_image":  None,
+        "network":    "bridge",    # servers need network — proxied through agent
+        "entrypoint": None,
+    },
+    "data_processing": {
+        "image":      "siddhantbh/gridnode-data-processing:latest",
+        "gpu_image":  None,
+        "network":    "none",
+        "entrypoint": None,
+    },
 }
+
+def get_image_config(job):
+    job_type = job["type"]
+    config   = IMAGE_REGISTRY.get(job_type)
+
+    if not config:
+        raise ValueError(
+            f"Unknown job type: '{job_type}'. "
+            f"Supported types: {list(IMAGE_REGISTRY.keys())}"
+        )
+
+    # select GPU image if job requests it and a GPU variant exists
+    if job.get("gpu_required") and config["gpu_image"]:
+        image = config["gpu_image"]
+    else:
+        image = config["image"]
+
+    return {**config, "resolved_image": image}
+
 
 def resolve_allocation(job, resources):
     """
@@ -81,12 +121,11 @@ def pull_image(image):
 
 
 def build_command(job, workspace, allocation):
-    job_type = job["type"]
-    image = IMAGES.get(job_type)
-    if not image:
-        raise ValueError(f"Unknown job type: {job_type}")
+    config         = get_image_config(job)
+    image          = config["resolved_image"]
+    network        = config["network"]
+    container_name = f"gridnode_job_{job['job_id']}"
 
-    container_name = f"computeshare_job_{job['id']}"
 
     cmd = [
         "docker", "run",
@@ -95,41 +134,66 @@ def build_command(job, workspace, allocation):
         f"--cpus={allocation['cpu']}",
         f"--memory={allocation['ram_gb']}g",
         "--memory-swap", f"{allocation['ram_gb']}g",
-        "--network",     "none",
+        "--network",     network,
         "--pids-limit",  "512",
+        "--security-opt", "no-new-privileges",
         "-v", f"{workspace}/repo:/workspace/repo:ro",
-        "-v", f"{workspace}/data:/workspace/data:ro",
+        "-v", f"{workspace}/data/input:/workspace/data:ro",
         "-v", f"{workspace}/outputs:/workspace/outputs",
         "-v", f"{workspace}/logs:/workspace/logs",
     ]
 
-    # job specific flags
-    if allocation["gpu"]:
+    if allocation.get("gpu"):
         cmd += ["--gpus", f"device={allocation['gpu']['device']}"]
 
-    if job_type == "notebook":
-        # The 'command' field contains the notebook path
-        cmd += [
-            image,
-            "papermill",
-            f"/workspace/repo/{job['command']}",
-            "/workspace/outputs/executed.ipynb",
-            "--cwd", "/workspace/repo",
-            "--log-output",
-        ]
-
-    elif job_type == "video":
-        cmd += [image, "bash", "-c", job["command"]]
+    # job-type-specific entrypoints
+    entrypoint_args = build_entrypoint(job, config)
+    cmd += [image] + entrypoint_args
 
     return cmd, container_name
 
+def build_entrypoint(job, config):
+    job_type = job["type"]
+
+    if job_type == "ml_notebook":
+        return [
+            "papermill",
+            f"/workspace/repo/{job['notebook_path']}",
+            "/workspace/outputs/executed.ipynb",
+            "-p", "DATA_DIR",    "/workspace/data",
+            "-p", "OUTPUT_DIR",  "/workspace/outputs",
+            "--cwd",             "/workspace/repo",
+            "--log-output",
+        ]
+
+    if job_type == "video_render":
+        # command is a validated FFmpeg string from the job manifest
+        return ["bash", "-c", job["command"]]
+
+    if job_type == "server_run":
+        #?? to be looked into ----------------------------------------------
+        return ["bash", "/workspace/repo/start.sh"]                 
+        # runs a startup script from the repo
+
+    if job_type == "data_processing":
+        return [
+            "python3",
+            f"/workspace/repo/{job['script_path']}",
+            "--data-dir",   "/workspace/data",
+            "--output-dir", "/workspace/outputs",
+        ]
+
+    raise ValueError(f"No entrypoint defined for job type: {job_type}")
+
 
 def run(job, workspace, allocation):
-    image = IMAGES[job["type"]]
-    pull_image(image)
-    
+    config = get_image_config(job)
+    pull_image(config["resolved_image"])
+
     cmd, container_name = build_command(job, workspace, allocation)
-    print(f"\n  Docker command:\n  {' '.join(shlex.quote(c) for c in cmd)}\n")
+    print(f"\n  Image   : {config['resolved_image']}")
+    print(f"  Network : {config['network']}")
+    print(f"  Command : {' '.join(shlex.quote(c) for c in cmd)}\n")
 
     process = subprocess.Popen(
         cmd,
@@ -139,7 +203,6 @@ def run(job, workspace, allocation):
         bufsize=1
     )
     return process, container_name
-
 
 
 def stop_container(container_name):
