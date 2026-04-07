@@ -157,9 +157,16 @@ def build_command(job, workspace, allocation, dep_volume=None):
     network        = config["network"]
     container_name = f"gridnode_job_{job['job_id']}"
 
+    if allocation.get("gpu"):
+        runtime = "runc"
+        print("  [Security] GPU job — using standard runc runtime")
+    else:
+        runtime = "runsc"
+        print("  [Security] Using gVisor (runsc) sandbox")
 
     cmd = [
         "docker", "run",
+        "--runtime", runtime,
         "--name",        container_name,
         "--rm",
         f"--cpus={allocation['cpu']}",
