@@ -31,39 +31,21 @@ if ! command -v docker &>/dev/null; then
 fi
 echo "  Docker ... OK"
 
-# # Create virtualenv
-# echo ""
-# echo "  Creating virtual environment..."
-# python3 -m venv ~/.computeshare/venv
+# one-time setup — downloads and registers the gVisor runtime
+curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" | sudo tee /etc/apt/sources.list.d/gvisor.list
+sudo apt-get update && sudo apt-get install -y runsc
+sudo runsc install   # registers runsc as a Docker runtime
+sudo systemctl restart docker
 
-# echo "  Upgrading core build tools..."
-# # ADD THESE TWO LINES
-# ~/.computeshare/venv/bin/pip install -q --upgrade pip setuptools wheel
-
-# echo "  Installing agent..."
-# ~/.computeshare/venv/bin/pip install -q --upgrade pip
-# ~/.computeshare/venv/bin/pip install -e "$PWD"
-
-# Create virtualenv with clear-on-start to ensure no old files remain
-echo "  Creating virtual environment..."
-python3 -m venv --clear ~/.computeshare/venv
-
-echo "  Upgrading core build tools..."
-# We use --no-cache-dir to ensure we aren't pulling a buggy cached version
-~/.computeshare/venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel
-
-echo "  Installing agent..."
-# Try a regular install first (no -e) to verify the pyproject.toml is valid
-~/.computeshare/venv/bin/pip install "$PWD"
-
-
-# Create a launcher script in /usr/local/bin
-echo "  Creating launcher..."
-sudo tee /usr/local/bin/computeshare-agent > /dev/null <<EOF
-#!/bin/bash
-~/.computeshare/venv/bin/computeshare-agent "\$@"
-EOF
-sudo chmod +x /usr/local/bin/computeshare-agent
+echo "  Installing agent binary..."
+if [ -f "./dist/computeshare-agent" ]; then
+    sudo cp ./dist/computeshare-agent /usr/local/bin/computeshare-agent
+    sudo chmod +x /usr/local/bin/computeshare-agent
+else
+    echo "[ERROR] Binary not found. Run ./build.sh first (or download the release binary)."
+    exit 1
+fi
 
 echo ""
 echo "=============================="

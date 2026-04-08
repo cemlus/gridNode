@@ -1,0 +1,16 @@
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    python3 \
+    python3-pip \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# install common server frameworks
+RUN pip3 install --no-cache-dir fastapi uvicorn flask gunicorn
+RUN npm install -g nodemon pm2
+
+WORKDIR /workspace

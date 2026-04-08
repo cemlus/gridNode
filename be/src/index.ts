@@ -6,6 +6,7 @@ import http from "http";
 import { auth } from "./lib/auth";
 import router from "./router";
 import { initSocket } from "./sockets";
+import { startSweeper, stopSweeper } from "./lib/sweeper";
 
 const app = express();
 const server = http.createServer(app);
@@ -39,4 +40,17 @@ initSocket(server);
 // Start
 server.listen(3005, () => {
   console.log("Server running on 3005");
+  startSweeper();
 });
+
+process.on("SIGTERM", () => {
+  console.log("SIGTERM received — shutting down");
+  stopSweeper();
+  server.close(() => process.exit(0));
+})
+
+process.on("SIGINT", () => {
+  stopSweeper();
+  server.close(() => process.exit(0));
+
+})

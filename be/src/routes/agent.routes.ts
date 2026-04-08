@@ -163,4 +163,19 @@ router.get("/jobs/next", requireAgentAuth, async (req, res) => {
 // We put this in jobs.routes.ts or agent.routes.ts? The agent.py uses /api/jobs/:id/status.
 // Let's add it to jobs.routes.ts to match the agent's expected path.
 
+// ---------------------------------------------------------------------
+
+router.get("/kaggle-credentials", requireAgentAuth, async (req, res) => {
+  const KAGGLE_USERNAME = process.env.KAGGLE_USERNAME;
+  const KAGGLE_API_TOKEN = process.env.KAGGLE_API_TOKEN;
+
+  if(!KAGGLE_API_TOKEN || !KAGGLE_USERNAME) return res.status(503).json({
+    error: `Kaggle credentials not configured on this platform.`
+  })
+  return res.json({
+    username: KAGGLE_USERNAME,
+    key: KAGGLE_API_TOKEN
+  })
+})
+
 export default router;

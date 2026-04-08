@@ -3,6 +3,7 @@ import time
 import threading
 import argparse
 import requests
+import signal
 
 from computeshare_agent import config
 from computeshare_agent import resources
@@ -12,23 +13,35 @@ from computeshare_agent import artifact_uploader
 from computeshare_agent.prerequisites import run_all_checks
 from computeshare_agent.log_streamer import LogStreamer
 
-# ── globals set after registration ──────────────────────────────────────────
 BACKEND_URL = None
 AUTH_HEADERS = {}
 MACHINE_ID  = None
 GPU_ENABLED = False
 
 _current_container = None          # track running container for reclaim
+_current_workspace = None          # track active workspace for teardown
+_current_job_id = None             # track active job for teardown
 _reclaim_flag = threading.Event()  # set by heartbeat thread on reclaim signal
 
 
-# ── auth helpers ─────────────────────────────────────────────────────────────
+def handle_shutdown(signum, frame):
+    print("\n[SHUTDOWN] Signal received. Commencing graceful teardown...")
+    if _current_container:
+        print(f"  -> Stopping container: {_current_container}")
+        docker_runner.stop_container(_current_container)
+    if _current_workspace:
+        print(f"  -> Cleaning up workspace: {_current_workspace}")
+        workspace.cleanup(_current_workspace)
+    if _current_job_id:
+        print(f"  -> Notifying backend of job interruption...")
+        report_status(_current_job_id, "failed", reason="Provider node shut down abruptly")
+    print("[SHUTDOWN] Teardown complete. Exiting.")
+    sys.exit(0)
+
 
 def headers():
     return AUTH_HEADERS.copy()
 
-
-# ── registration ─────────────────────────────────────────────────────────────
 
 def register(token):
     res = resources.snapshot()
@@ -63,8 +76,6 @@ def register(token):
     return cfg
 
 
-# ── heartbeat (runs in background thread) ────────────────────────────────────
-
 def heartbeat_loop():
     global _current_container
     while True:
@@ -95,8 +106,6 @@ def heartbeat_loop():
         time.sleep(10)
 
 
-# ── job polling ───────────────────────────────────────────────────────────────
-
 def fetch_job():
     # print(".", end="", flush=True) # Optional: dots for less noise
     resp = requests.get(
@@ -110,8 +119,6 @@ def fetch_job():
     print("\n  [INFO] Job found!")
     return resp.json().get("job")
 
-
-# ── status reporting ──────────────────────────────────────────────────────────
 
 def report_status(job_id, status, reason=None, allocation=None):
     payload = {"status": status}
@@ -130,11 +137,10 @@ def report_status(job_id, status, reason=None, allocation=None):
         print(f"  [WARN] Status report failed: {e}")
 
 
-# ── job execution ─────────────────────────────────────────────────────────────
-
 def execute_job(job):
-    global _current_container
+    global _current_container, _current_workspace, _current_job_id
     job_id = job["id"]
+    _current_job_id = job_id
     ws = None
 
     print(f"\n{'─'*50}")
@@ -160,14 +166,21 @@ def execute_job(job):
 
         # 2. prepare workspace
         ws = workspace.create(job_id)
+        _current_workspace = ws
         workspace.clone_repo(job["repoUrl"], ws)
 
-        if job.get("kaggleDatasetUrl"):
-            workspace.download_file(job["kaggleDatasetUrl"], ws, job.get("dataset_filename", "input"))
+        if job.get("dataset_url"):
+            workspace.download_file(
+                url          = job["dataset_url"],
+                workspace    = ws,
+                filename     = job.get("dataset_filename", "input"),
+                backend_url  = BACKEND_URL,      # needed for Kaggle credential fetch
+                agent_headers= headers()         # auth headers for the credential endpoint
+            )
 
         # 3. run Docker container
         _reclaim_flag.clear()
-        process, container_name = docker_runner.run(job, ws, allocation)
+        process, container_name, _ = docker_runner.run(job, ws, allocation)
         _current_container = container_name
 
         # 4. stream logs
@@ -202,15 +215,19 @@ def execute_job(job):
         _current_container = None
 
     finally:
+        _current_container = None
+        _current_workspace = None
+        _current_job_id = None
         if ws:
             workspace.cleanup(ws)
 
 
-# ── main loop ─────────────────────────────────────────────────────────────────
-
 def run_agent():
     print("\nComputeShare Agent")
     print("==================")
+
+    signal.signal(signal.SIGINT, handle_shutdown)
+    signal.signal(signal.SIGTERM, handle_shutdown)
 
     # prerequisites
     checks = run_all_checks()
@@ -252,8 +269,6 @@ def run_agent():
             time.sleep(10)   # back off before retrying
 
 
-# ── CLI ───────────────────────────────────────────────────────────────────────
-
 def main():
     parser = argparse.ArgumentParser(prog="computeshare-agent")
     sub = parser.add_subparsers(dest="command")
@@ -292,54 +307,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-"""
-
-## What the output looks like when it runs
-```
-ComputeShare Agent
-==================
-
-=== Checking prerequisites ===
-
-  Checking Python version... OK (Python 3.11)
-  Installing dependencies... OK
-  Checking Docker... OK
-  Checking NVIDIA Docker runtime... OK (GPU sharing enabled)
-
-=== All checks passed ===
-
-  CPU  : 5.5 usable cores (of 8 total)
-  RAM  : 10.2 GB usable (of 16 GB total)
-  GPU  : NVIDIA RTX 3080  8192 MB VRAM free (of 10240 MB)
-  DISK : 142.3 GB free
-
-  Registered as machine: machine_a3f9
-
-Machine ID : machine_a3f9
-Backend    : http://localhost:8000
-
-Heartbeat started. Waiting for jobs...
-
-──────────────────────────────────────────────────
-  Job job_101 | type: ml_notebook
-──────────────────────────────────────────────────
-  Allocation → CPU: 4.0 cores | RAM: 6.0 GB | GPU: yes
-  Cloning https://github.com/user/train-model... OK
-  Downloading train.csv...
-  100%|████████████████| 45.2M/45.2M [00:03<00:00]
-  
-  Docker command:
-  docker run --name computeshare_job_101 --rm --cpus=4.0 ...
-
-  [live log lines stream here from the container]
-
-  Uploading artifacts...
-  Uploading executed.ipynb (1.2 MB)... OK
-  Uploading model.pkl (38.4 MB)... OK
-  Uploaded: 2 | Failed: 0
-
-  Job job_101 completed successfully.
-
-Waiting for jobs...
-
-"""

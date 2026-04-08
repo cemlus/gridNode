@@ -2,16 +2,57 @@
 
 import subprocess
 import shlex
-
+import os
 
 MIN_VIABLE_CPU_CORES = 0.5
 MIN_VIABLE_RAM_GB    = 0.5
 GPU_VRAM_HEADROOM_MB = 512
 
-IMAGES = {
-    "notebook": "jupyter/scipy-notebook:latest",
-    "video": "jrottenberg/ffmpeg:4.4-ubuntu",
+IMAGE_REGISTRY = {
+    "ml_notebook": {
+        "image":      "siddhantbh/gridnode-ml-base:latest",
+        "gpu_image":  "siddhantbh/gridnode-ml-gpu:latest",   # used if job requests GPU
+        "network":    "none",                      # no internet needed
+        "entrypoint": None,                        # use image default
+    },
+    "video_render": {
+        "image":      "siddhantbh/gridnode-video:latest",
+        "gpu_image":  None,                        # no GPU variant for video
+        "network":    "none",
+        "entrypoint": None,
+    },
+    "server_run": {
+        "image":      "siddhantbh/gridnode-server-runner:latest",
+        "gpu_image":  None,
+        "network":    "bridge",    # servers need network — proxied through agent
+        "entrypoint": None,
+    },
+    "data_processing": {
+        "image":      "siddhantbh/gridnode-data-processing:latest",
+        "gpu_image":  None,
+        "network":    "none",
+        "entrypoint": None,
+    },
 }
+
+def get_image_config(job):
+    job_type = job["type"]
+    config   = IMAGE_REGISTRY.get(job_type)
+
+    if not config:
+        raise ValueError(
+            f"Unknown job type: '{job_type}'. "
+            f"Supported types: {list(IMAGE_REGISTRY.keys())}"
+        )
+
+    # select GPU image if job requests it and a GPU variant exists
+    if job.get("gpu_required") and config["gpu_image"]:
+        image = config["gpu_image"]
+    else:
+        image = config["image"]
+
+    return {**config, "resolved_image": image}
+
 
 def resolve_allocation(job, resources):
     """
@@ -80,66 +121,150 @@ def pull_image(image):
     print("OK")
 
 
-def build_command(job, workspace, allocation):
-    job_type = job["type"]
-    image = IMAGES.get(job_type)
-    if not image:
-        raise ValueError(f"Unknown job type: {job_type}")
+def run_setup_phase(job, workspace, dep_volume_name, image):
+    repo_dir = os.path.join(workspace, "repo")
+    req_path = os.path.join(repo_dir, "requirements.txt")
+    
+    if not os.path.exists(req_path):
+        return False
+    
+    print("  [Setup] Installing user dependencies...")
+    cmd = [
+        "docker", "run", "--rm",
+        "--network", "bridge",        # internet only during install
+        "--name", f"setup_{job['job_id']}",
+        "--entrypoint", "",           # override entrypoint to safely run pip
+        "-v", f"{workspace}/repo:/workspace/repo:ro",
+        "-v", f"{dep_volume_name}:/workspace/deps",
+        image,
+        "python3", "-m", "pip", "install",
+        "-r", "/workspace/repo/requirements.txt",
+        "--target", "/workspace/deps",
+        "--no-cache-dir",
+        "--quiet"
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    if result.returncode != 0:
+        raise RuntimeError(f"Dependency install failed:\n{result.stderr}")
+    
+    print("  [Setup] Dependencies installed OK")
+    return True
 
-    container_name = f"computeshare_job_{job['id']}"
+
+def build_command(job, workspace, allocation, dep_volume=None):
+    config         = get_image_config(job)
+    image          = config["resolved_image"]
+    network        = config["network"]
+    container_name = f"gridnode_job_{job['job_id']}"
+
+    if allocation.get("gpu"):
+        runtime = "runc"
+        print("  [Security] GPU job — using standard runc runtime")
+    else:
+        runtime = "runsc"
+        print("  [Security] Using gVisor (runsc) sandbox")
 
     cmd = [
         "docker", "run",
+        "--runtime", runtime,
         "--name",        container_name,
         "--rm",
         f"--cpus={allocation['cpu']}",
         f"--memory={allocation['ram_gb']}g",
         "--memory-swap", f"{allocation['ram_gb']}g",
-        "--network",     "none",
+        "--network",     network,
         "--pids-limit",  "512",
+        "--security-opt", "no-new-privileges",
         "-v", f"{workspace}/repo:/workspace/repo:ro",
-        "-v", f"{workspace}/data:/workspace/data:ro",
+        "-v", f"{workspace}/data/input:/workspace/data:ro",
         "-v", f"{workspace}/outputs:/workspace/outputs",
         "-v", f"{workspace}/logs:/workspace/logs",
     ]
 
-    # job specific flags
-    if allocation["gpu"]:
+    if allocation.get("gpu"):
         cmd += ["--gpus", f"device={allocation['gpu']['device']}"]
+        
+    if dep_volume:
+        cmd += ["-v", f"{dep_volume}:/workspace/deps:ro"]
+        cmd += ["-e", "PYTHONPATH=/workspace/deps"]
 
-    if job_type == "notebook":
-        # The 'command' field contains the notebook path
-        cmd += [
-            image,
-            "papermill",
-            f"/workspace/repo/{job['command']}",
-            "/workspace/outputs/executed.ipynb",
-            "--cwd", "/workspace/repo",
-            "--log-output",
-        ]
-
-    elif job_type == "video":
-        cmd += [image, "bash", "-c", job["command"]]
+    # job-type-specific entrypoints
+    entrypoint_args = build_entrypoint(job, config)
+    cmd += [image] + entrypoint_args
 
     return cmd, container_name
 
 
+def build_entrypoint(job, config):
+    job_type = job["type"]
+
+    if job_type == "ml_notebook":
+        return [
+            "papermill",
+            f"/workspace/repo/{job['notebook_path']}",
+            "/workspace/outputs/executed.ipynb",
+            "-p", "DATA_DIR",    "/workspace/data",
+            "-p", "OUTPUT_DIR",  "/workspace/outputs",
+            "--cwd",             "/workspace/repo",
+            "--log-output",
+        ]
+
+    if job_type == "video_render":
+        # command is a validated FFmpeg string from the job manifest
+        return ["bash", "-c", job["command"]]
+
+    if job_type == "server_run":
+        #?? to be looked into ----------------------------------------------
+        return ["bash", "/workspace/repo/start.sh"]                 
+        # runs a startup script from the repo
+
+    if job_type == "data_processing":
+        return [
+            f"/workspace/repo/{job['script_path']}",
+            "--data-dir",   "/workspace/data",
+            "--output-dir", "/workspace/outputs",
+        ]
+
+    raise ValueError(f"No entrypoint defined for job type: {job_type}")
+
+
 def run(job, workspace, allocation):
-    image = IMAGES[job["type"]]
-    pull_image(image)
+    config = get_image_config(job)
+    image = config["resolved_image"]
     
-    cmd, container_name = build_command(job, workspace, allocation)
-    print(f"\n  Docker command:\n  {' '.join(shlex.quote(c) for c in cmd)}\n")
+    pull_image(image)
 
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1
-    )
-    return process, container_name
+    dep_volume = f"deps_{job['job_id']}"
+    repo_dir = os.path.join(workspace, "repo")
+    req_path = os.path.join(repo_dir, "requirements.txt")
+    has_deps = os.path.exists(req_path)
 
+    try:
+        if has_deps:
+            subprocess.run(["docker", "volume", "create", dep_volume], check=True)
+            success = run_setup_phase(job, workspace, dep_volume, image)
+            if not success:
+                has_deps = False
+
+        cmd, container_name = build_command(job, workspace, allocation, dep_volume if has_deps else None)
+        
+        print(f"\n  Image   : {image}")
+        print(f"  Network : {config['network']}")
+        print(f"  Command : {' '.join(shlex.quote(c) for c in cmd)}\n")
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+        return process, container_name, dep_volume if has_deps else None
+
+    except Exception:
+        if has_deps:
+            subprocess.run(["docker", "volume", "rm", dep_volume], capture_output=True)
+        raise            
 
 
 def stop_container(container_name):

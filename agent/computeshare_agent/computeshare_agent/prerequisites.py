@@ -78,6 +78,21 @@ def check_nvidia_docker():
     return True
 
 
+def check_gvisor():
+    print("  Checking gVisor runtime...", end=" ")
+    result = subprocess.run(
+        ["docker", "info", "--format", "{{json .Runtimes}}"],
+        capture_output=True, text=True
+    )
+    if "runsc" in result.stdout:
+        print("OK (gVisor available)")
+        return True
+    print("WARN (not installed — using standard runc)")
+    print("     GPU jobs will run normally; CPU jobs will use standard isolation.")
+    print("     To enable gVisor: https://gvisor.dev/docs/user_guide/install/")
+    return False
+
+
 def install_dependencies():
     import os
     
@@ -111,5 +126,6 @@ def run_all_checks():
     install_dependencies()
     check_docker()
     gpu_available = check_nvidia_docker()
+    check_gvisor()
     print("\n=== All checks passed ===\n")
     return {"gpu_available": gpu_available}

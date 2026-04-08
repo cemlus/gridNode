@@ -40,16 +40,37 @@ def upload_all(job_id, workspace, backend_url, headers):
         print(f"  Registering artifact {filename} ({size_mb:.1f} MB)...", end=" ")
 
         try:
-            # Backend currently only handles metadata, not actual file storage
-            payload = {
+            # 1. Request presigned URL
+            presign_payload = {
                 "filename": filename,
-                "storagePath": f"local://{job_id}/{filename}",
+                "mimeType": "application/octet-stream"
+            }
+            presign_resp = requests.post(
+                f"{backend_url}/api/jobs/{job_id}/artifacts/presign",
+                json=presign_payload,
+                headers=headers,
+                timeout=10
+            )
+            presign_resp.raise_for_status()
+            presign_data = presign_resp.json()
+            upload_url = presign_data["uploadUrl"]
+            storage_path = presign_data["storagePath"]
+
+            # 2. Upload file to S3
+            with open(filepath, "rb") as f:
+                put_resp = requests.put(upload_url, data=f)
+                put_resp.raise_for_status()
+
+            # 3. Finalize and register with backend
+            register_payload = {
+                "filename": filename,
+                "storagePath": storage_path,
                 "sizeBytes": size_bytes,
-                "mimeType": "application/octet-stream" # basic fallback
+                "mimeType": "application/octet-stream"
             }
             resp = requests.post(
                 f"{backend_url}/api/jobs/{job_id}/artifacts",
-                json=payload,
+                json=register_payload,
                 headers=headers,
                 timeout=10
             )

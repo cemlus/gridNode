@@ -1,100 +1,118 @@
 # GridNode
 
-**GridNode** is a trusted distributed compute platform: a **requester** submits compute jobs (code + data + resource needs), an **owner** **approves** each job, and a lightweight **agent** on the owner’s machine runs the work inside **Docker**—sandboxed, logged, and without giving the requester direct access to the host.
+GridNode is a distributed compute platform for running user-submitted jobs on provider-owned machines without giving requesters direct host access. A requester submits a job, a provider approves it, the backend tracks scheduling and state, and the local `computeshare-agent` executes the work inside Docker on the provider's machine.
 
-This repo is the hackathon implementation: a **control plane** (API + database + realtime), a **Next.js** web app, and (planned) a **Python agent** that executes jobs locally.
+This repository contains the full stack:
 
----
+- a Next.js frontend for requesters and providers
+- an Express + Prisma backend for auth, jobs, approvals, machines, logs, and artifacts
+- a Python agent that registers machines, polls for work, runs Docker containers, streams logs, and uploads outputs
+- Docker runner images for notebook, video, server, and data-processing workloads
 
-## Goals
+## How GridNode Works
 
-| Principle | What it means here |
-|-----------|-------------------|
-| **Owner control** | Jobs start only after approval; owners can reclaim or stop work. |
-| **No direct machine access** | Requesters never SSH or shell into the owner’s machine; execution goes through the agent + container. |
-| **Sandboxed execution** | User code runs in Docker with CPU/RAM (and later GPU) limits. |
-| **Observable** | Status, logs, and output artifacts are tracked and surfaced in the UI. |
+1. A requester signs in and creates a compute job.
+2. The backend matches that job to a suitable machine and routes it to the provider for approval.
+3. The provider reviews pending work and approves or rejects it.
+4. The provider's local `computeshare-agent` polls for assigned jobs.
+5. The agent prepares a workspace, runs the job in Docker, streams logs, and registers artifacts.
+6. The frontend shows job state, logs, approvals, machines, and outputs.
 
-### Supported workloads (target)
-
-1. **ML notebook training** — GitHub repo + notebook path + dataset; outputs such as executed notebook, model checkpoint, metrics.
-2. **Video / FFmpeg pipelines** — repo or script + input video + command; outputs such as transcoded or processed video files.
-
----
-
-## Repository structure
+## Repository Overview
 
 ```text
 gridNode/
-├── fe/                 # Requester & owner web UI (Next.js, Tailwind)
-│   ├── app/            # App Router pages (e.g. login, dashboard)
-│   └── lib/            # Shared client code (e.g. auth client)
-├── be/                 # Control-plane API (Express, TypeScript)
-│   ├── prisma/         # Prisma schema & migrations
-│   └── src/
-│       ├── routes/     # REST: jobs, machines, auth helpers
-│       ├── sockets/    # Socket.IO (live logs / rooms)
-│       ├── lib/        # Auth, DB
-│       └── middleware/
-└── agent/              # Owner-machine worker (Python) — planned
+├── fe/                         # Next.js frontend
+├── be/                         # Express + Prisma backend
+├── agent/computeshare_agent/   # Python agent, installer, tests, build scripts
+├── docker/                     # Workload runner images
+└── README.md
 ```
 
-- **`fe/`** — Portal for signing in, submitting jobs (to be built), approving jobs (to be built), and watching status/logs.
-- **`be/`** — Single backend for auth, job and machine records, scheduling (to be built), and realtime events.
-- **`agent/`** — Will register the machine, poll for work, prepare workspaces, run Docker, stream logs, and upload artifacts.
+### Main parts of the repo
 
-Artifact storage for the hackathon may stay on **local disk** or move to **MinIO** / S3-compatible storage later.
+- `fe/`
+  Requester/provider UI built with Next.js 16, React 19, Tailwind, and shadcn/ui.
+- `be/`
+  Control plane built with Express, Prisma, PostgreSQL, Better Auth, Socket.IO, and S3 helpers.
+- `agent/computeshare_agent/`
+  Owner-side agent CLI and runtime. This is the code behind `computeshare-agent`.
+- `docker/`
+  Base images and workload-specific runner images used by the agent.
 
----
+## Current Capabilities
 
-## Architecture (high level)
+The repo already contains working code for:
 
-```text
-Requester / Owner UI (fe, Next.js)
-        ↓ HTTPS
-Backend (be, Express) + PostgreSQL + Socket.IO
-        ↓ polling / APIs
-Agent on owner machine (agent, Python) → Docker → job outputs
-```
+- Google-based sign-in via Better Auth
+- job creation, listing, filtering, detail pages, and stop actions
+- provider approval and rejection flows
+- machine registration, listing, and reclaim actions
+- live job logs and artifact views in the frontend
+- agent registration and long-lived session token creation
+- agent heartbeat, job polling, job status updates, artifact registration, and log ingestion
+- Docker-based execution plumbing for notebook, video, server, and data-processing jobs
 
-The backend is the source of truth for users, machines, jobs, approvals, and artifacts. It does **not** execute user code; the **agent** does, on the owner’s hardware.
+## Architecture Snapshot
 
----
+- Frontend:
+  Next.js app for login, dashboard, jobs, approvals, and machines
+- Backend:
+  source of truth for users, machines, approvals, jobs, logs, and artifacts
+- Agent:
+  execution plane running on the provider's machine
+- Docker images:
+  workload runtimes stored under `docker/`
 
-## Tech stack
+At a high level, the backend owns coordination and state, while the agent performs execution on provider hardware.
 
-| Layer | Choice |
-|-------|--------|
-| Frontend | Next.js, Tailwind CSS, Better Auth client |
-| Backend | Express (TypeScript), Prisma, PostgreSQL |
-| Auth | Better Auth (e.g. Google OAuth) on the API |
-| Realtime | Socket.IO |
-| Execution | Docker + Python agent (planned); notebooks via papermill/nbconvert; video via FFmpeg in container |
-
----
-
-## Local development
+## Local Development Quickstart
 
 ### Prerequisites
 
-- **Node.js** (LTS recommended)
-- **PostgreSQL** running locally or reachable via `DATABASE_URL`
-- Google OAuth app credentials if you use Google sign-in (see `be/.env.example`)
+- Node.js
+- npm
+- PostgreSQL accessible through `DATABASE_URL`
+- Google OAuth credentials for Better Auth if you want login to work end-to-end
+- Docker if you plan to run or test the agent
 
-### Backend (`be`)
+### Backend
 
 ```bash
 cd be
+npm install
 cp .env.example .env
-# Edit .env: DATABASE_URL, BETTER_AUTH_SECRET, BETTER_AUTH_URL, GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET
+```
 
+Set at least these values in `be/.env`:
+
+- `DATABASE_URL`
+- `BETTER_AUTH_SECRET`
+- `BETTER_AUTH_URL=http://localhost:3005`
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+
+Optional env vars already supported in the repo include AWS and Kaggle credentials:
+
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `AWS_REGION`
+- `S3_BUCKET_NAME`
+- `KAGGLE_USERNAME`
+- `KAGGLE_API_TOKEN`
+
+Then start the backend:
+
+```bash
+cd be
+npx prisma generate
 npx prisma migrate dev
 npm run dev
 ```
 
-API listens on **http://localhost:3005** (see `be/src/index.ts`). Auth routes are mounted under `/api/auth/*`.
+The backend listens on `http://localhost:3005`.
 
-### Frontend (`fe`)
+### Frontend
 
 ```bash
 cd fe
@@ -102,29 +120,116 @@ npm install
 npm run dev
 ```
 
-App runs at **http://localhost:3000**. The auth client is configured to talk to the backend at `http://localhost:3005`.
+The frontend runs on `http://localhost:3000`.
 
----
+By default, the frontend talks to the backend at `http://localhost:3005`.
 
-## Current status (snapshot)
+## New User: Connect Your Machine
 
-Implemented in rough form: **Google login**, **session-aware** API routes, **job creation** and **machine registration** primitives, **Socket.IO** server with a `join-job` room helper. **Approvals**, **scheduling**, **agent protocol**, **artifact upload**, and **full UI flows** are not complete yet—see below.
+If you want to provide compute to GridNode, this is the current Linux-first flow:
 
----
+1. Start the frontend and backend.
+2. Sign in through the web app.
+3. Open the machines page at `/machines`.
+4. Generate or copy your personal agent registration key.
+5. Install the agent locally on the machine you want to connect.
+6. Run the agent for first-time registration:
 
-## What to implement next
+```bash
+computeshare-agent start --token <your-agent-key> --backend http://localhost:3005
+```
 
-Suggested order (aligned with the hackathon build plan):
+On first run, the agent registers the machine and stores its long-lived config locally. After that, you can start it without the one-time registration key:
 
-1. **Data model & APIs** — `job` type (notebook vs video), approval records, `job_events`, log lines, artifact metadata, agent session / heartbeat fields on machines; REST routes for pending approvals, approve/reject, job detail, logs, artifacts, stop/reclaim.
-2. **Scheduler** — First-fit: pick first machine that satisfies CPU/RAM/GPU and policy; transition `approved → queued → assigned`.
-3. **Owner & requester UI** — Submit job form, owner approval queue, job detail with live logs (Socket.IO), download outputs.
-4. **Python agent** — Register machine, heartbeat, poll/fetch assigned job manifest, workspace layout (`repo/`, `data/`, `outputs/`, `logs/`), run Docker, stream stdout/stderr to backend, POST artifacts.
-5. **Docker images** — One path for notebook + papermill; one for FFmpeg; resource limits from job spec.
-6. **Hardening** — Reclaim/stop, timeouts, failure states, minimal demo datasets/repos for ML and video.
+```bash
+computeshare-agent start
+```
 
----
+## Agent Install Details
 
-## Credits
+The current agent onboarding is repo-based and Linux-first. It is not yet packaged as a polished public download or release flow.
 
-GridNode by Zoltac.
+### What the current Linux installer expects
+
+- Python `3.9+`
+- Docker installed and available on `PATH`
+- `sudo` access for system-level setup
+- an Ubuntu/Debian-style environment with `apt-get`, because the installer sets up `runsc`/gVisor and restarts Docker
+
+### Current install path in this repo
+
+The installer lives at `agent/computeshare_agent/install.sh`, and it expects a built binary at:
+
+```text
+agent/computeshare_agent/dist/computeshare-agent
+```
+
+That means the current flow is:
+
+```bash
+cd agent/computeshare_agent
+./build.sh
+./install.sh
+```
+
+After installation, start the agent with:
+
+```bash
+computeshare-agent start --token <your-agent-key> --backend http://localhost:3005
+```
+
+On later runs:
+
+```bash
+computeshare-agent start
+```
+
+### What the installer does
+
+- verifies Python and Docker
+- installs `runsc` / gVisor
+- restarts Docker
+- copies the built `computeshare-agent` binary into `/usr/local/bin`
+
+### Windows note
+
+There is also a Windows installer stub at `agent/computeshare_agent/install.bat`, but the Linux flow is the more current path reflected by this repo and its system setup assumptions.
+
+## API and Product Surface
+
+Some of the main user- and agent-facing flows exposed by the repo are:
+
+- `/machines`
+  generate a personal machine registration key and manage connected machines
+- `/jobs`
+  create, view, filter, and stop jobs
+- `/approvals`
+  review and decide pending provider approvals
+- `computeshare-agent start --token <key> --backend <url>`
+  first-run machine registration
+- `computeshare-agent start`
+  subsequent agent startup using saved config
+
+## Known Gaps and Current Limitations
+
+- The agent install/distribution story is still rough and repo-oriented.
+- Some older docs in the repo still describe parts of the system as planned or use outdated paths.
+- The agent defaults to `http://localhost:8000` if `--backend` is omitted, while the backend in this repo runs on `http://localhost:3005`, so the README should always use the explicit backend flag for local setup.
+- The project still has hackathon-level edges around packaging, hardening, and cross-platform polish.
+
+## Tech Stack
+
+- Frontend: Next.js 16, React 19, Tailwind CSS, shadcn/ui
+- Backend: Express, TypeScript, Prisma, PostgreSQL, Better Auth, Socket.IO
+- Agent: Python
+- Execution: Docker plus workload-specific images under `docker/`
+
+## Why This README Exists
+
+This root README is the canonical repo-level introduction for:
+
+- someone trying to understand what GridNode is
+- a developer trying to run the stack locally
+- a provider trying to connect a machine with the agent
+
+If you need deeper implementation detail, the backend, frontend, and agent directories contain the code and supporting docs for each subsystem.
