@@ -3,6 +3,7 @@ import time
 import threading
 import argparse
 import requests
+import signal
 
 from computeshare_agent import config
 from computeshare_agent import resources
@@ -18,7 +19,24 @@ MACHINE_ID  = None
 GPU_ENABLED = False
 
 _current_container = None          # track running container for reclaim
+_current_workspace = None          # track active workspace for teardown
+_current_job_id = None             # track active job for teardown
 _reclaim_flag = threading.Event()  # set by heartbeat thread on reclaim signal
+
+
+def handle_shutdown(signum, frame):
+    print("\n[SHUTDOWN] Signal received. Commencing graceful teardown...")
+    if _current_container:
+        print(f"  -> Stopping container: {_current_container}")
+        docker_runner.stop_container(_current_container)
+    if _current_workspace:
+        print(f"  -> Cleaning up workspace: {_current_workspace}")
+        workspace.cleanup(_current_workspace)
+    if _current_job_id:
+        print(f"  -> Notifying backend of job interruption...")
+        report_status(_current_job_id, "failed", reason="Provider node shut down abruptly")
+    print("[SHUTDOWN] Teardown complete. Exiting.")
+    sys.exit(0)
 
 
 def headers():
@@ -120,8 +138,9 @@ def report_status(job_id, status, reason=None, allocation=None):
 
 
 def execute_job(job):
-    global _current_container
+    global _current_container, _current_workspace, _current_job_id
     job_id = job["id"]
+    _current_job_id = job_id
     ws = None
 
     print(f"\n{'─'*50}")
@@ -147,6 +166,7 @@ def execute_job(job):
 
         # 2. prepare workspace
         ws = workspace.create(job_id)
+        _current_workspace = ws
         workspace.clone_repo(job["repoUrl"], ws)
 
         if job.get("dataset_url"):
@@ -160,7 +180,7 @@ def execute_job(job):
 
         # 3. run Docker container
         _reclaim_flag.clear()
-        process, container_name = docker_runner.run(job, ws, allocation)
+        process, container_name, _ = docker_runner.run(job, ws, allocation)
         _current_container = container_name
 
         # 4. stream logs
@@ -195,6 +215,9 @@ def execute_job(job):
         _current_container = None
 
     finally:
+        _current_container = None
+        _current_workspace = None
+        _current_job_id = None
         if ws:
             workspace.cleanup(ws)
 
@@ -202,6 +225,9 @@ def execute_job(job):
 def run_agent():
     print("\nComputeShare Agent")
     print("==================")
+
+    signal.signal(signal.SIGINT, handle_shutdown)
+    signal.signal(signal.SIGTERM, handle_shutdown)
 
     # prerequisites
     checks = run_all_checks()
