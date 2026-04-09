@@ -1,4 +1,4 @@
-export type JobType = "notebook" | "video";
+export type JobType = "ml_notebook" | "video_render" | "server_run" | "data_processing";
 export type JobStatus = "draft" | "pending_approval" | "approved" | "rejected" | "queued" | "assigned" | "running" | "completed" | "failed" | "preempted" | "cancelled";
 export type ApprovalStatus = "pending" | "approved" | "rejected";
 

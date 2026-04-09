@@ -33,7 +33,7 @@ export default function JobCreateModal({
   onOpenChange,
   onSuccess,
 }: Props) {
-  const [type, setType] = useState<JobType>("notebook");
+  const [type, setType] = useState<JobType>("ml_notebook");
   const [repoUrl, setRepoUrl] = useState("");
   const [command, setCommand] = useState("");
 
@@ -53,7 +53,7 @@ export default function JobCreateModal({
   const [error, setError] = useState<string | null>(null);
 
   const reset = () => {
-    setType("notebook");
+    setType("ml_notebook");
     setRepoUrl("");
     setCommand("");
     setKaggleDatasetUrl("");
@@ -91,13 +91,13 @@ export default function JobCreateModal({
         kaggleDatasetUrl: kaggleDatasetUrl.trim() || null,
 
         // Command depends on type
-        ...(type === "notebook"
+        ...(type === "ml_notebook"
           ? { command: command.trim() }
           : { command: command.trim() }), // Both use command field
       };
 
       if (!body.command) {
-        throw new Error(type === "notebook" ? "Command is required for notebook jobs" : "Command is required for video jobs");
+        throw new Error(type === "ml_notebook" ? "Command is required for notebook jobs" : "Command is required for video jobs");
       }
 
       const res = await fetch("http://localhost:3005/api/jobs", {
@@ -141,8 +141,8 @@ export default function JobCreateModal({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="notebook">Notebook (ML)</SelectItem>
-                <SelectItem value="video">Video (FFmpeg)</SelectItem>
+                <SelectItem value="ml_notebook">Notebook (ML)</SelectItem>
+                <SelectItem value="video_render">Video (FFmpeg)</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -278,9 +278,9 @@ export default function JobCreateModal({
           {/* Command / Notebook Path */}
           <div className="space-y-2">
             <label className="text-sm font-medium">
-              {type === "notebook" ? "Notebook Command" : "Execution Command"}
+              {type === "ml_notebook" ? "Notebook Command" : "Execution Command"}
             </label>
-            {type === "notebook" ? (
+            {type === "ml_notebook" ? (
               <Input
                 placeholder="e.g., jupyter nbconvert --to notebook execute.ipynb"
                 value={command}
@@ -296,7 +296,7 @@ export default function JobCreateModal({
               />
             )}
             <p className="text-xs text-muted-foreground">
-              {type === "notebook"
+              {type === "ml_notebook"
                 ? "Command to execute within the notebook repository"
                 : "Full command to run for video processing"}
             </p>
