@@ -5,6 +5,7 @@ import type {
   Approval,
   JobLog,
   Artifact,
+  ArtifactDownload,
   JobEvent,
   ApiResponse,
   MachineRegisterResponse,
@@ -107,6 +108,10 @@ export async function appendJobLogAgent(id: string, lines: { line: string; strea
 
 export async function getJobArtifacts(id: string): Promise<Artifact[]> {
   return fetchApi<Artifact[]>(`/api/jobs/${id}/artifacts`);
+}
+
+export async function getJobArtifactDownloadUrl(id: string, artifactId: string): Promise<ArtifactDownload> {
+  return fetchApi<ArtifactDownload>(`/api/jobs/${id}/artifacts/${artifactId}/download`);
 }
 
 export async function registerArtifact(id: string, data: {

@@ -2,15 +2,28 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { authClient } from "@/lib/auth-client";
+import { getJob, getJobArtifactDownloadUrl, getJobArtifacts, getJobLogs, stopJob } from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Textarea } from "@/components/ui/textarea";
-import { Loader2, ArrowLeft, Play, Square } from "lucide-react";
+import { Loader2, ArrowLeft, Download, Square } from "lucide-react";
 import Link from "next/link";
-import { Job, JobLog, JobEvent, JobStatus, MemoryTier, GpuMemoryTier, DurationTier } from "@/types/api";
+import {
+  Job,
+  JobLog,
+  JobEvent,
+  MemoryTier,
+  GpuMemoryTier,
+  DurationTier,
+  Artifact,
+} from "@/types/api";
 import StatusBadge from "@/components/StatusBadge";
 import { formatDistanceToNow } from "date-fns";
 
@@ -49,22 +62,20 @@ export default function JobDetailPage() {
   const router = useRouter();
   const jobId = params.id as string;
   const { socket, isConnected, joinJob } = useSocket();
-  const { data: session } = authClient.useSession();
 
   const [job, setJob] = useState<Job | null>(null);
   const [logs, setLogs] = useState<JobLog[]>([]);
   const [events, setEvents] = useState<JobEvent[]>([]);
-  const [artifacts, setArtifacts] = useState<any[]>([]);
+  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
+  const [downloadingArtifactId, setDownloadingArtifactId] = useState<string | null>(null);
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   const fetchJob = useCallback(async () => {
     try {
-      const res = await fetch(`http://localhost:3005/api/jobs/${jobId}`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch job");
-      const data = await res.json();
+      const data = await getJob(jobId);
       setJob(data);
       setEvents(data.events || []);
     } catch (e: any) {
@@ -74,37 +85,44 @@ export default function JobDetailPage() {
     }
   }, [jobId]);
 
-  const fetchLogs = useCallback(async (afterSequence = 0) => {
-    try {
-      const res = await fetch(`http://localhost:3005/api/jobs/${jobId}/logs?afterSequence=${afterSequence}&limit=100`, {
-        credentials: "include",
-      });
-      if (res.ok) {
-        const data: { logs: JobLog[]; nextAfterSequence: number } = await res.json();
+  const fetchLogs = useCallback(
+    async (afterSequence = 0) => {
+      try {
+        const data = await getJobLogs(jobId, afterSequence, 100);
         setLogs((prev) => {
           const existingSeqs = new Set(prev.map((l) => l.sequence));
           const newLogs = data.logs.filter((l) => !existingSeqs.has(l.sequence));
           return [...prev, ...newLogs].sort((a, b) => a.sequence - b.sequence);
         });
         return data.nextAfterSequence;
+      } catch (e) {
+        console.error("Failed to fetch logs", e);
       }
-    } catch (e) {
-      console.error("Failed to fetch logs", e);
-    }
-    return afterSequence;
-  }, [jobId]);
+      return afterSequence;
+    },
+    [jobId],
+  );
 
   const fetchArtifacts = useCallback(async () => {
     try {
-      const res = await fetch(`http://localhost:3005/api/jobs/${jobId}/artifacts`, { credentials: "include" });
-      if (res.ok) {
-        const data = await res.json();
-        setArtifacts(data);
-      }
+      const data = await getJobArtifacts(jobId);
+      setArtifacts(data);
     } catch (e) {
       console.error("Failed to fetch artifacts", e);
     }
   }, [jobId]);
+
+  const downloadArtifact = async (artifact: Artifact) => {
+    try {
+      setDownloadingArtifactId(artifact.id);
+      const { downloadUrl } = await getJobArtifactDownloadUrl(jobId, artifact.id);
+      window.open(downloadUrl, "_blank", "noopener,noreferrer");
+    } catch (error) {
+      console.error("Failed to get artifact download URL from backend", error);
+    } finally {
+      setDownloadingArtifactId(null);
+    }
+  };
 
   useEffect(() => {
     fetchJob();
@@ -141,7 +159,15 @@ export default function JobDetailPage() {
         socket.off("job-update", handleJobUpdate);
       };
     }
-  }, [socket, isConnected, jobId, joinJob, fetchJob, fetchLogs, fetchArtifacts]);
+  }, [
+    socket,
+    isConnected,
+    jobId,
+    joinJob,
+    fetchJob,
+    fetchLogs,
+    fetchArtifacts,
+  ]);
 
   // Auto-scroll logs
   useEffect(() => {
@@ -152,11 +178,7 @@ export default function JobDetailPage() {
     if (!confirm("Stop this job?")) return;
     setStopping(true);
     try {
-      const res = await fetch(`http://localhost:3005/api/jobs/${jobId}/stop`, {
-        method: "POST",
-        credentials: "include",
-      });
-      if (!res.ok) throw new Error("Failed to stop job");
+      await stopJob(jobId);
       await fetchJob();
       alert("Job stopped");
     } catch (e: any) {
@@ -178,14 +200,24 @@ export default function JobDetailPage() {
     return (
       <div className="text-center text-destructive py-12">
         {error || "Job not found"}
-        <Button variant="outline" className="ml-4" onClick={() => router.back()}>
+        <Button
+          variant="outline"
+          className="ml-4"
+          onClick={() => router.back()}
+        >
           <ArrowLeft className="mr-2 h-4 w-4" /> Back
         </Button>
       </div>
     );
   }
 
-  const isTerminal = ["completed", "failed", "preempted", "cancelled", "rejected"].includes(job.status);
+  const isTerminal = [
+    "completed",
+    "failed",
+    "preempted",
+    "cancelled",
+    "rejected",
+  ].includes(job.status);
   const canStop = !isTerminal;
 
   return (
@@ -200,12 +232,18 @@ export default function JobDetailPage() {
           </Button>
           <h1 className="text-3xl font-bold">Job Details</h1>
           <div className="flex items-center space-x-4">
-            <Badge variant="outline" className="capitalize">{job.type}</Badge>
+            <Badge variant="outline" className="capitalize">
+              {job.type}
+            </Badge>
             <StatusBadge status={job.status} />
           </div>
         </div>
         {canStop && (
-          <Button variant="destructive" onClick={handleStop} disabled={stopping}>
+          <Button
+            variant="destructive"
+            onClick={handleStop}
+            disabled={stopping}
+          >
             {stopping && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             <Square className="mr-2 h-4 w-4" />
             Stop Job
@@ -222,7 +260,12 @@ export default function JobDetailPage() {
           <CardContent className="space-y-4">
             <div>
               <span className="font-medium">Repository:</span>{" "}
-              <a href={job.repoUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+              <a
+                href={job.repoUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline"
+              >
                 {job.repoUrl}
               </a>
             </div>
@@ -230,7 +273,9 @@ export default function JobDetailPage() {
             {job.command && (
               <div>
                 <span className="font-medium">Command:</span>
-                <code className="ml-2 bg-muted px-2 py-1 rounded text-sm">{job.command}</code>
+                <code className="ml-2 bg-muted px-2 py-1 rounded text-sm">
+                  {job.command}
+                </code>
               </div>
             )}
 
@@ -252,7 +297,10 @@ export default function JobDetailPage() {
                 <span className="font-medium">Time Estimates:</span>
                 <ul className="text-sm text-muted-foreground list-disc list-inside">
                   {job.estimatedDuration && (
-                    <li>Estimated Duration: {formatDurationTier(job.estimatedDuration)}</li>
+                    <li>
+                      Estimated Duration:{" "}
+                      {formatDurationTier(job.estimatedDuration)}
+                    </li>
                   )}
                 </ul>
               </div>
@@ -261,15 +309,30 @@ export default function JobDetailPage() {
             {job.kaggleDatasetUrl && (
               <div className="pt-2 border-t">
                 <span className="font-medium">Kaggle Dataset:</span>{" "}
-                <a href={job.kaggleDatasetUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                <a
+                  href={job.kaggleDatasetUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary hover:underline"
+                >
                   {job.kaggleDatasetUrl}
                 </a>
               </div>
             )}
 
             <div className="text-sm text-muted-foreground pt-2 border-t">
-              <div>Created: {formatDistanceToNow(new Date(job.createdAt), { addSuffix: true })}</div>
-              <div>Updated: {formatDistanceToNow(new Date(job.updatedAt), { addSuffix: true })}</div>
+              <div>
+                Created:{" "}
+                {formatDistanceToNow(new Date(job.createdAt), {
+                  addSuffix: true,
+                })}
+              </div>
+              <div>
+                Updated:{" "}
+                {formatDistanceToNow(new Date(job.updatedAt), {
+                  addSuffix: true,
+                })}
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -281,15 +344,25 @@ export default function JobDetailPage() {
           <div>
             <CardTitle>Live Logs</CardTitle>
             <CardDescription>
-              Real-time stream (Socket: {isConnected ? <span className="text-green-500">connected</span> : <span className="text-red-500">disconnected</span>})
+              Real-time stream (Socket:{" "}
+              {isConnected ? (
+                <span className="text-green-500">connected</span>
+              ) : (
+                <span className="text-red-500">disconnected</span>
+              )}
+              )
             </CardDescription>
           </div>
-          <Button size="sm" variant="outline" onClick={() => fetchLogs()}>Refresh</Button>
+          <Button size="sm" variant="outline" onClick={() => fetchLogs()}>
+            Refresh
+          </Button>
         </CardHeader>
         <CardContent>
           <div className="log-viewer">
             {logs.length === 0 ? (
-              <div className="text-muted-foreground text-sm">No logs yet. Agent will stream logs here.</div>
+              <div className="text-muted-foreground text-sm">
+                No logs yet. Agent will stream logs here.
+              </div>
             ) : (
               logs.map((log) => (
                 <div key={log.id} className={`log-line ${log.stream || ""}`}>
@@ -308,25 +381,43 @@ export default function JobDetailPage() {
       {/* Artifacts */}
       <Card>
         <CardHeader>
-          <CardTitle>Artifacts ({artifacts.length})</CardTitle>
-          <CardDescription>Output files registered by the agent</CardDescription>
+          <CardTitle>Artifacts</CardTitle>
+          <CardDescription>
+            Output files registered by the agent
+          </CardDescription>
         </CardHeader>
         <CardContent>
           {artifacts.length === 0 ? (
-            <div className="text-muted-foreground text-sm">No artifacts yet</div>
+            <div className="text-muted-foreground text-sm">
+              No artifacts yet
+            </div>
           ) : (
             <div className="space-y-2">
-              {artifacts.map((art) => (
-                <div key={art.id} className="flex items-center justify-between p-3 rounded-md border">
-                  <div>
-                    <div className="font-medium">{art.filename}</div>
+              {artifacts.map((artifact) => (
+                <div
+                  key={artifact.id}
+                  className="flex items-center justify-between gap-3 p-3 rounded-md border"
+                >
+                  <div className="min-w-0">
+                    <div className="font-medium break-all">{artifact.filename}</div>
                     <div className="text-xs text-muted-foreground">
-                      {art.mimeType && `${art.mimeType} • `}
-                      {art.sizeBytes ? `${(art.sizeBytes / 1024).toFixed(1)} KB` : "Size unknown"}
+                      {artifact.mimeType && `${artifact.mimeType} • `}
+                      {artifact.sizeBytes
+                        ? `${(artifact.sizeBytes / 1024).toFixed(1)} KB`
+                        : "Size unknown"}
                     </div>
                   </div>
-                  {/* Placeholder download button */}
-                  <Button size="sm" variant="outline" disabled>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={downloadingArtifactId === artifact.id}
+                    onClick={() => downloadArtifact(artifact)}
+                  >
+                    {downloadingArtifactId === artifact.id ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Download className="mr-2 h-4 w-4" />
+                    )}
                     Download
                   </Button>
                 </div>
@@ -347,11 +438,16 @@ export default function JobDetailPage() {
           ) : (
             <div className="space-y-3">
               {events.map((ev) => (
-                <div key={ev.id} className="text-sm border-b pb-2 last:border-0">
+                <div
+                  key={ev.id}
+                  className="text-sm border-b pb-2 last:border-0"
+                >
                   <div className="flex items-center justify-between">
                     <Badge variant="outline">{ev.type}</Badge>
                     <span className="text-xs text-muted-foreground">
-                      {formatDistanceToNow(new Date(ev.createdAt), { addSuffix: true })}
+                      {formatDistanceToNow(new Date(ev.createdAt), {
+                        addSuffix: true,
+                      })}
                     </span>
                   </div>
                   {ev.payload && (

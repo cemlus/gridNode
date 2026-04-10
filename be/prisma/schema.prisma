@@ -8,8 +8,10 @@ datasource db {
 }
 
 enum JobType {
-  notebook
-  video
+  ml_notebook
+  video_render
+  server_run
+  data_processing
 }
 
 enum JobStatus {
@@ -172,7 +174,7 @@ model Job {
   machineId       String?
   decidedById     String?    // The user who approved/rejected the job
 
-  type            JobType    @default(notebook)
+  type            JobType    @default(ml_notebook)
   repoUrl         String
   command         String
   kaggleDatasetUrl String?

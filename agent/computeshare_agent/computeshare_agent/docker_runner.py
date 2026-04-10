@@ -109,6 +109,55 @@ def is_viable(allocation, job):
         return False, "GPU required but not available or insufficient VRAM"
     return True, None
 
+def find_data_file(data_input_dir):
+    """Find the primary data file after Kaggle extraction."""
+    for root, _, files in os.walk(data_input_dir):
+        for f in files:
+            if f.endswith((".csv", ".parquet", ".json", ".xlsx")):
+                return os.path.join(root, f)
+    return data_input_dir   # fallback to directory if no file found
+
+
+# in docker_runner.py, for ml_notebook jobs,
+# prepend a parameters cell to the notebook before papermill runs
+def inject_parameters_cell(notebook_path_host, params: dict):
+    """
+    If the notebook has no 'parameters' tagged cell,
+    inject one at position 0 with the given params.
+    Modifies the notebook file in-place (it's in the repo copy, read-only mount won't work).
+    """
+    import json
+    
+    with open(notebook_path_host) as f:
+        nb = json.load(f)
+    
+    # check if parameters cell already exists
+    has_params = any(
+        "parameters" in cell.get("metadata", {}).get("tags", [])
+        for cell in nb.get("cells", [])
+    )
+    
+    if has_params:
+        return  # nothing to do
+    
+    # build the parameters cell source
+    source = "\n".join(f"{k} = {v!r}" for k, v in params.items())
+    
+    params_cell = {
+        "cell_type": "code",
+        "execution_count": None,
+        "metadata": {"tags": ["parameters"]},
+        "outputs": [],
+        "source": source,
+    }
+    
+    nb["cells"].insert(0, params_cell)
+    
+    with open(notebook_path_host, "w") as f:
+        json.dump(nb, f)
+    
+    print(f"  [Papermill] Injected parameters cell into notebook")
+
 
 def pull_image(image):
     print(f"  Pulling image {image}...", end=" ")
@@ -175,7 +224,8 @@ def build_command(job, workspace, allocation, dep_volume=None):
         "--network",     network,
         "--pids-limit",  "512",
         "--security-opt", "no-new-privileges",
-        "-v", f"{workspace}/repo:/workspace/repo:ro",
+        # "-v", f"{workspace}/repo:/workspace/repo:ro",
+        "-v", f"{workspace}/repo_writable:/workspace/repo:ro",
         "-v", f"{workspace}/data/input:/workspace/data:ro",
         "-v", f"{workspace}/outputs:/workspace/outputs",
         "-v", f"{workspace}/logs:/workspace/logs",
@@ -189,21 +239,28 @@ def build_command(job, workspace, allocation, dep_volume=None):
         cmd += ["-e", "PYTHONPATH=/workspace/deps"]
 
     # job-type-specific entrypoints
-    entrypoint_args = build_entrypoint(job, config)
+    entrypoint_args = build_entrypoint(job, workspace, config)
     cmd += [image] + entrypoint_args
 
     return cmd, container_name
 
 
-def build_entrypoint(job, config):
+def build_entrypoint(job, workspace, config):
     job_type = job["type"]
 
     if job_type == "ml_notebook":
+        data_input_dir = os.path.join(workspace, "data", "input")
+        data_file_host = find_data_file(data_input_dir)
+        # translate host path to container path
+        # host: /home/siddhant/.computeshare/workspaces/job_X/data/input/file.csv
+        # container: /workspace/data/file.csv
+        data_file_container = "/workspace/data/" + os.path.basename(data_file_host)
+    
         return [
             "papermill",
             f"/workspace/repo/{job['notebook_path']}",
             "/workspace/outputs/executed.ipynb",
-            "-p", "DATA_DIR",    "/workspace/data",
+            "-p", "DATA_PATH",   data_file_container,
             "-p", "OUTPUT_DIR",  "/workspace/outputs",
             "--cwd",             "/workspace/repo",
             "--log-output",

@@ -88,43 +88,15 @@ router.post("/machines/register", async (req, res) => {
   }
 });
 
-// POST /api/agent/machines/:id/heartbeat — agent uses Bearer token (userKey)
-router.post("/machines/:id/heartbeat", requireAgentAuth, async (req, res) => {
-  try {
-    const machineId = String(req.params.id);
-    const agentSession = (req as any).agentSession;
-
-    if (machineId !== agentSession.machineId) {
-      return res.status(403).json({ error: "Machine id does not match session" });
-    }
-
-    const now = new Date();
-    await prisma.$transaction([
-      prisma.agentSession.update({
-        where: { id: agentSession.id },
-        data: { lastHeartbeatAt: now },
-      }),
-      prisma.machine.update({
-        where: { id: agentSession.machineId },
-        data: { lastHeartbeatAt: now },
-      }),
-    ]);
-
-    res.json({ ok: true, lastHeartbeatAt: now.toISOString() });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Heartbeat failed" });
-  }
-});
 
 // GET /api/agent/jobs/next — agent polls for a job
+
 router.get("/jobs/next", requireAgentAuth, async (req, res) => {
   try {
     const agentSession = (req as any).agentSession;
     
-    // Find a job that is 'approved' or 'queued'
-    // For now, we'll just take the oldest one. 
-    // In a real system, we'd match machine specs (CPU/RAM tiers) here.
+    console.log(`[jobs/next] Agent session: machineId=${agentSession.machineId}`);
+
     const job = await prisma.job.findFirst({
       where: {
         status: { in: ["approved", "queued"] as any },
@@ -139,31 +111,41 @@ router.get("/jobs/next", requireAgentAuth, async (req, res) => {
       }
     });
 
+    console.log(`[jobs/next] Query result: ${job ? `found job ${job.id} status=${job.status} machineId=${job.machineId}` : "no job found"}`);
+
     if (!job) {
+      // log why — check if there are any approved jobs at all
+      const pendingCount = await prisma.job.count({
+        where: { status: { in: ["approved", "queued"] as any } }
+      });
+      console.log(`[jobs/next] No job for this machine. Total approved/queued jobs in DB: ${pendingCount}`);
       return res.status(204).end();
     }
 
-    // Assign job to this machine and set status to 'assigned'
     const updatedJob = await prisma.job.update({
       where: { id: job.id },
-      data: {
-        status: "assigned",
-        machineId: agentSession.machineId
-      }
+      data: { status: "assigned", machineId: agentSession.machineId },
+      include: { requester: { select: { name: true, email: true } } } // keep relation
     });
+
+    // console.log(`[jobs/next] Assigned job ${updatedJob.id} to machine ${agentSession.machineId}`);
+    // console.log(`[jobs/next] Job fields sent to agent:`, JSON.stringify({
+    //   id: updatedJob.id,
+    //   type: updatedJob.type,
+    //   repoUrl: updatedJob.repoUrl,
+    //   command: updatedJob.command,
+    //   cpuTier: updatedJob.cpuTier,
+    //   memoryTier: updatedJob.memoryTier,
+    //   kaggleDatasetUrl: updatedJob.kaggleDatasetUrl,
+    // }, null, 2));
 
     res.json({ job: updatedJob });
   } catch (err) {
-    console.error(err);
+    console.error("[jobs/next] Error:", err);
     res.status(500).json({ error: "Failed to fetch next job" });
   }
 });
 
-// PATCH /api/jobs/:id/status — agent reports job status change
-// We put this in jobs.routes.ts or agent.routes.ts? The agent.py uses /api/jobs/:id/status.
-// Let's add it to jobs.routes.ts to match the agent's expected path.
-
-// ---------------------------------------------------------------------
 
 router.get("/kaggle-credentials", requireAgentAuth, async (req, res) => {
   const KAGGLE_USERNAME = process.env.KAGGLE_USERNAME;
@@ -177,5 +159,9 @@ router.get("/kaggle-credentials", requireAgentAuth, async (req, res) => {
     key: KAGGLE_API_TOKEN
   })
 })
+
+// PATCH /api/jobs/:id/status — agent reports job status change
+// We put this in jobs.routes.ts or agent.routes.ts? The agent.py uses /api/jobs/:id/status.
+// Let's add it to jobs.routes.ts to match the agent's expected path.
 
 export default router;

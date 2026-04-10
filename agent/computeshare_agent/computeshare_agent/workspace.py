@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 
 WORKSPACE_ROOT   = os.environ.get("COMPUTESHARE_WORKSPACE_ROOT",
-                                   "/var/computeshare/workspaces")
+                                   os.path.expanduser("~/.computeshare/workspaces"))
 DOWNLOAD_TIMEOUT = 120           # seconds for initial connection
 STREAM_TIMEOUT   = (10, 60)      # (connect, read) timeouts for streaming
 CHUNK_SIZE       = 8 * 1024 * 1024  # 8 MB chunks
@@ -25,7 +25,7 @@ MAX_DATASET_SIZE_GB = 20
 def create(job_id):
     os.makedirs(WORKSPACE_ROOT, exist_ok=True)
     base = os.path.join(WORKSPACE_ROOT, f"job_{job_id}")
-    for sub in ["repo", "data", "data/input", "outputs", "logs"]:
+    for sub in ["repo", "repo_writable", "data", "data/input", "outputs", "logs"]:
         os.makedirs(os.path.join(base, sub), exist_ok=True)
     print(f"  Workspace: {base}")
     return base
@@ -114,6 +114,18 @@ def remove_kaggle_credentials(creds_path):
         print("  [Kaggle] Credentials removed from disk")
 
 
+def sanitise_data_filenames(input_dir):
+    """Rename files with spaces to use underscores — prevents gVisor/shell issues."""
+    for filename in os.listdir(input_dir):
+        if " " in filename:
+            safe_name = filename.replace(" ", "_")
+            os.rename(
+                os.path.join(input_dir, filename),
+                os.path.join(input_dir, safe_name)
+            )
+            print(f"  [Workspace] Renamed: {filename!r} → {safe_name!r}")
+
+
 def download_kaggle_dataset(url, workspace, backend_url, agent_headers):
     """
     Download a Kaggle dataset using the official Kaggle CLI.
@@ -132,12 +144,10 @@ def download_kaggle_dataset(url, workspace, backend_url, agent_headers):
 
         # check kaggle CLI is available
         if shutil.which("kaggle") is None:
-            print("  [Kaggle] CLI not found — installing...")
-            subprocess.run(
-                [sys.executable, "-m", "pip", "install", "kaggle", "-q"],
-                check=True
+            raise RuntimeError(
+                "kaggle CLI not found. Run: pip install kaggle"
             )
-
+                
         print(f"  [Kaggle] Downloading {slug}...")
         result = subprocess.run(
             [
@@ -162,6 +172,7 @@ def download_kaggle_dataset(url, workspace, backend_url, agent_headers):
 
         # move extracted files into data/input/ for consistency
         _normalise_into_input_dir(dest_dir)
+        sanitise_data_filenames(os.path.join(dest_dir, "input"))  
         return dest_dir
 
     finally:
@@ -384,6 +395,7 @@ def download_file(url, workspace, filename, backend_url=None, agent_headers=None
         print(f"  File type: raw data (no extraction needed)")
 
     # show what ended up in input/
+    sanitise_data_filenames(input_dir)
     _print_input_contents(input_dir)
     return input_dir
 
@@ -405,6 +417,7 @@ def _print_input_contents(input_dir):
 
 def clone_repo(repo_url, workspace):
     target = os.path.join(workspace, "repo")
+    writable_target = os.path.join(workspace, "repo_writable")
 
     if os.listdir(target):
         shutil.rmtree(target)
@@ -420,4 +433,36 @@ def clone_repo(repo_url, workspace):
     if result.returncode != 0:
         raise RuntimeError(f"git clone failed:\n{result.stderr}")
     print("OK")
+
+    if os.path.exists(writable_target):
+        shutil.rmtree(writable_target)
+    shutil.copytree(target, writable_target)
+    print(f"  Created writable repo copy at {writable_target}")
     return target
+
+
+def resolve_repo_file(workspace, requested_path, allowed_extensions=None):
+    repo_root = os.path.join(workspace, "repo_writable")
+    normalized = (requested_path or "").strip().lstrip("/").replace("\\", "/")
+
+    if normalized:
+        direct_path = os.path.join(repo_root, normalized)
+        if os.path.exists(direct_path):
+            return direct_path, normalized
+
+    matches = []
+    for root, _, files in os.walk(repo_root):
+        for name in files:
+            rel_path = os.path.relpath(os.path.join(root, name), repo_root)
+            rel_path = rel_path.replace(os.sep, "/")
+            if allowed_extensions and not rel_path.endswith(allowed_extensions):
+                continue
+            matches.append(rel_path)
+
+    preview = ", ".join(matches[:10])
+    if len(matches) > 10:
+        preview += ", ..."
+    raise FileNotFoundError(
+        f"Could not find repo file {requested_path!r} in {repo_root}. "
+        f"Available candidates: {preview}"
+    )

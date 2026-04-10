@@ -103,7 +103,7 @@ router.post("/register", async (req, res) => {
   }
 });
 
-// POST /api/machines/:id/heartbeat — agent
+// // POST /api/machines/:id/heartbeat — agent
 router.post("/:id/heartbeat", requireAgentAuth, async (req, res) => {
   try {
     const id = String(req.params.id);
@@ -114,6 +114,13 @@ router.post("/:id/heartbeat", requireAgentAuth, async (req, res) => {
     }
 
     const now = new Date();
+
+    const preemptedJob = await prisma.job.findFirst({
+      where: { machineId: id, status: JobStatus.preempted }
+    });
+
+    console.log(`[heartbeat] machine=${id} preemptedJob=${preemptedJob?.id ?? "none"} reclaim=${!!preemptedJob}`);
+
     await prisma.$transaction([
       prisma.agentSession.update({
         where: { id: agentSession.id },
@@ -125,9 +132,13 @@ router.post("/:id/heartbeat", requireAgentAuth, async (req, res) => {
       }),
     ]);
 
-    res.json({ ok: true, lastHeartbeatAt: now.toISOString() });
+    res.json({ 
+      ok: true, 
+      lastHeartbeatAt: now.toISOString(),
+      reclaim: !!preemptedJob 
+    });
   } catch (err) {
-    console.error(err);
+    console.error("[heartbeat] Error:", err);
     res.status(500).json({ error: "Heartbeat failed" });
   }
 });
@@ -160,7 +171,8 @@ router.post("/:id/reclaim", requireAuth, async (req, res) => {
         where: { machineId, status: { in: active } },
         data: {
           status: JobStatus.preempted,
-          machineId: null,
+          // We DON'T nullify machineId here, so the agent can still see the 'preempted' status
+          // The agent will report 'idle' in its next heartbeat, and we can cleanup then.
         },
       });
       for (const j of jobs) {

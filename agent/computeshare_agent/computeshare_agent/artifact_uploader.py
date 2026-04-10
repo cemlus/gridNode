@@ -55,7 +55,7 @@ def upload_all(job_id, workspace, backend_url, headers):
             presign_data = presign_resp.json()
             upload_url = presign_data["uploadUrl"]
             storage_path = presign_data["storagePath"]
-
+            
             # 2. Upload file to S3
             with open(filepath, "rb") as f:
                 put_resp = requests.put(upload_url, data=f)

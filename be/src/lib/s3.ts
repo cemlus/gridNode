@@ -17,7 +17,15 @@ export async function generatePutUrl(key: string, contentType: string) {
   return getSignedUrl(s3Client, command, { expiresIn: 900 }); // Valid for 15 mins
 }
 
-export async function generateGetUrl(key: string) {
-  const command = new GetObjectCommand({ Bucket: BUCKET_NAME, Key: key });
+export async function generateGetUrl(key: string, filename?: string) {
+  const command = new GetObjectCommand({
+    Bucket: BUCKET_NAME,
+    Key: key,
+    ...(filename
+      ? {
+          ResponseContentDisposition: `attachment; filename="${filename.replace(/"/g, "")}"`,
+        }
+      : {}),
+  });
   return getSignedUrl(s3Client, command, { expiresIn: 3600 }); // Valid for 1 hour
 }
