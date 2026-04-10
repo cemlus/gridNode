@@ -103,7 +103,7 @@ router.post("/register", async (req, res) => {
   }
 });
 
-// POST /api/machines/:id/heartbeat — agent
+// // POST /api/machines/:id/heartbeat — agent
 router.post("/:id/heartbeat", requireAgentAuth, async (req, res) => {
   try {
     const id = String(req.params.id);
@@ -115,13 +115,11 @@ router.post("/:id/heartbeat", requireAgentAuth, async (req, res) => {
 
     const now = new Date();
 
-    // Check for preempted jobs
     const preemptedJob = await prisma.job.findFirst({
-      where: {
-        machineId: id,
-        status: JobStatus.preempted
-      }
+      where: { machineId: id, status: JobStatus.preempted }
     });
+
+    console.log(`[heartbeat] machine=${id} preemptedJob=${preemptedJob?.id ?? "none"} reclaim=${!!preemptedJob}`);
 
     await prisma.$transaction([
       prisma.agentSession.update({
@@ -140,7 +138,7 @@ router.post("/:id/heartbeat", requireAgentAuth, async (req, res) => {
       reclaim: !!preemptedJob 
     });
   } catch (err) {
-    console.error(err);
+    console.error("[heartbeat] Error:", err);
     res.status(500).json({ error: "Heartbeat failed" });
   }
 });
