@@ -10,13 +10,31 @@ import type { Machine } from "@/types/api";
 
 interface MachineStatusBadgeProps {
   lastHeartbeatAt: string | null;
+  status: string;
 }
 
-function MachineStatusBadge({ lastHeartbeatAt }: MachineStatusBadgeProps) {
+function MachineStatusBadge({ lastHeartbeatAt, status }: MachineStatusBadgeProps) {
   const isRecent = lastHeartbeatAt && new Date(lastHeartbeatAt) > new Date(Date.now() - 5 * 60 * 1000);
+  
+  if (!isRecent) {
+    return (
+      <Badge variant="destructive">
+        Offline
+      </Badge>
+    );
+  }
+
+  if (status === "running") {
+    return (
+      <Badge className="bg-green-500 hover:bg-green-600 text-white">
+        Running Job
+      </Badge>
+    );
+  }
+
   return (
-    <Badge variant={isRecent ? "success" : lastHeartbeatAt ? "warning" : "outline"}>
-      {isRecent ? "Active" : lastHeartbeatAt ? "Stale" : "Never"}
+    <Badge variant="secondary">
+      Idle
     </Badge>
   );
 }
@@ -187,16 +205,13 @@ export default function MachinesPage() {
                       <Monitor className="mr-2 h-4 w-4" />
                       {machine.id.slice(0, 8)}...
                     </CardTitle>
-                    <MachineStatusBadge lastHeartbeatAt={machine.lastHeartbeatAt} />
+                    <MachineStatusBadge lastHeartbeatAt={machine.lastHeartbeatAt} status={machine.status} />
                   </div>
                   <CardDescription>
                     CPU: {machine.cpuTotal} • RAM: {Math.round(machine.memoryTotal / 1024)}GB • GPU: {machine.gpuTotal}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                  <div className="text-sm">
-                    <span className="font-medium">Status:</span> {machine.status}
-                  </div>
                   {machine.gpuTotal > 0 && machine.gpuVendor && (
                     <div className="text-sm">
                       <span className="font-medium">GPU:</span> {machine.gpuVendor} ({Math.round(machine.gpuMemoryTotal || 0 / 1024)}GB)
