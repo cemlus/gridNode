@@ -124,6 +124,13 @@ async function sweep() {
                         data: { status: JobStatus.failed },
                     });
 
+                    if (job.machineId) {
+                        await tx.machine.update({
+                            where: { id: job.machineId },
+                            data: { totalJobsFailed: { increment: 1 } }
+                        });
+                    }
+
                     await tx.jobEvent.create({
                         data: {
                             jobId: job.id,
