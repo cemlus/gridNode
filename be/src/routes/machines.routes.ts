@@ -156,18 +156,24 @@ router.post("/:id/reclaim", requireAuth, async (req, res) => {
     }
 
     const active = [
+      JobStatus.pending_approval,
+      JobStatus.approved,
       JobStatus.queued,
       JobStatus.assigned,
       JobStatus.running,
     ];
 
+    console.log(`[Reclaim] User ${user.id} reclaiming machine ${machineId}. Querying for statuses:`, active);
+
     const jobs = await prisma.job.findMany({
       where: { machineId, status: { in: active } },
-      select: { id: true },
+      select: { id: true, status: true },
     });
 
+    console.log(`[Reclaim] Found ${jobs.length} jobs to preempt:`, jobs.map(j => `ID=${j.id} Status=${j.status}`));
+
     await prisma.$transaction(async (tx) => {
-      await tx.job.updateMany({
+      const updateResult = await tx.job.updateMany({
         where: { machineId, status: { in: active } },
         data: {
           status: JobStatus.preempted,
@@ -175,11 +181,14 @@ router.post("/:id/reclaim", requireAuth, async (req, res) => {
           // The agent will report 'idle' in its next heartbeat, and we can cleanup then.
         },
       });
+      
+      console.log(`[Reclaim] Successfully updated ${updateResult.count} jobs to preempted status.`);
+
       for (const j of jobs) {
         const eventData: Prisma.JobEventUncheckedCreateInput = {
           jobId: j.id,
           type: "machine_reclaim",
-          payload: { machineId } as Prisma.InputJsonValue,
+          payload: { machineId, previousStatus: j.status } as Prisma.InputJsonValue,
           actorId: user.id,
         };
         await tx.jobEvent.create({ data: eventData });
@@ -192,7 +201,7 @@ router.post("/:id/reclaim", requireAuth, async (req, res) => {
 
     res.json({ ok: true, preemptedJobIds: jobs.map((j) => j.id) });
   } catch (err) {
-    console.error(err);
+    console.error(`[Reclaim] Error:`, err);
     res.status(500).json({ error: "Reclaim failed" });
   }
 });
