@@ -88,7 +88,7 @@ export default function JobDetailPage() {
   const fetchLogs = useCallback(
     async (afterSequence = 0) => {
       try {
-        const data = await getJobLogs(jobId, afterSequence, 100);
+        const data = await getJobLogs(jobId, afterSequence, 5000);
         setLogs((prev) => {
           const existingSeqs = new Set(prev.map((l) => l.sequence));
           const newLogs = data.logs.filter((l) => !existingSeqs.has(l.sequence));
