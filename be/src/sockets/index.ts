@@ -27,3 +27,7 @@ export const emitLog = (jobId: string, log: string) => {
 export const emitJobUpdate = (jobId: string, data: unknown) => {
   io?.to(`job-${jobId}`).emit("job-update", data);
 };
+
+export const emitMailUpdate = (jobId: string, data: unknown) => {
+  io?.to(`job-${jobId}`).emit("email-sent", data);
+}

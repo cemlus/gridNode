@@ -6,8 +6,9 @@ import { prisma } from "../lib/db";
 import { appendJobEvent } from "../lib/jobEvents";
 import { canStop } from "../lib/jobStatus";
 import { canViewJob, canStopJob, resolveStopTargetStatus } from "../lib/jobAccess";
-import { emitLog, emitJobUpdate } from "../sockets";
+import { emitLog, emitJobUpdate, emitMailUpdate } from "../sockets";
 import { generateGetUrl, generatePutUrl } from "../lib/s3";
+import { sendJobResultEmail } from "../lib/email";
 
 const router = Router();
 
@@ -198,8 +199,8 @@ router.post("/", requireAuth, async (req, res) => {
     });
 
     if (eligibleMachines.length === 0) {
-      return res.status(404).json({ 
-        error: "No suitable machines currently online to handle this job with the required trust level. Try lower resource requirements." 
+      return res.status(404).json({
+        error: "No suitable machines currently online to handle this job with the required trust level. Try lower resource requirements."
       });
     }
 
@@ -223,7 +224,7 @@ router.post("/", requireAuth, async (req, res) => {
     });
 
     const matchedMachine = eligibleMachines[0];
-    if(!matchedMachine){ 
+    if (!matchedMachine) {
       return res.status(403).json({
         message: `The first eligible machine that is picked isn't valid`
       })
@@ -466,27 +467,26 @@ router.post("/:id/artifacts/presign", requireAgentAuth, async (req, res) => {
     const job = await prisma.job.findUnique({
       where: { id: jobId }
     })
-    if (!job) return res.status(404).json({ error: `Job not found` });    
+    if (!job) return res.status(404).json({ error: `Job not found` });
     if (job.machineId !== agentSession.machineId) {
       return res.status(403).json({
         error: `Job not assigned to this machine`
       })
     }
     const { filename, mimeType } = req.body as { filename?: string, mimeType?: string };
-    if (!filename) return res.status(400).json({ error: "filename is required" }); 
+    if (!filename) return res.status(400).json({ error: "filename is required" });
 
     const safeFilename = filename.replace(/[^a-zA-Z0-9.\-_]/g, '_');
     const storagePath = `jobs/${jobId}/${Date.now()}-${safeFilename}`;
     const resolvedMime = mimeType || "application/octet-stream";
-    
-    const uploadUrl = await generatePutUrl(storagePath, resolvedMime);    
+
+    const uploadUrl = await generatePutUrl(storagePath, resolvedMime);
     res.json({ uploadUrl, storagePath });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Failed to generate presigned URL" });
   }
 })
-
 
 // GET /api/jobs/:id/artifacts/:artifactId/download
 router.get("/:id/artifacts/:artifactId/download", requireAuth, async (req, res) => {
@@ -509,7 +509,6 @@ router.get("/:id/artifacts/:artifactId/download", requireAuth, async (req, res) 
     res.status(500).json({ error: "Failed to generate download URL" });
   }
 });
-
 
 // POST /api/jobs/:id/stop
 router.post("/:id/stop", requireAuth, async (req, res) => {
@@ -565,7 +564,10 @@ router.patch("/:id/status", requireAgentAuth, async (req, res) => {
       actual_allocation?: any;
     };
 
-    const job = await prisma.job.findUnique({ where: { id: jobId } });
+    const job = await prisma.job.findUnique({
+      where: { id: jobId },
+      include: { requester: true }
+    });
     if (!job) return res.status(404).json({ error: "Job not found" });
     if (job.machineId !== agentSession.machineId) {
       return res.status(403).json({ error: "Job not assigned to this machine" });
@@ -585,6 +587,26 @@ router.patch("/:id/status", requireAgentAuth, async (req, res) => {
         where: { id: updated.machineId },
         select: { id: true, trustScore: true }
       });
+      const [logs, artifacts] = await Promise.all([
+        prisma.jobLog.findMany({
+          where: {
+            jobId: job.id
+          },
+          orderBy: {
+            createdAt: 'desc'
+          },
+          take: 100
+        }),
+        prisma.artifact.findMany({
+          where: { jobId: job.id },
+        }),
+      ])
+      const artifactsWithUrl = await Promise.all(
+        artifacts.map(async (a) => ({
+          ...a,
+          downloadUrl: await generateGetUrl(a.id)
+        }))
+      )
       if (machine) {
         if (status === JobStatus.completed) {
           await prisma.machine.update({
@@ -602,6 +624,14 @@ router.patch("/:id/status", requireAgentAuth, async (req, res) => {
             }
           });
         }
+        await sendJobResultEmail({
+          to: job.requester.email,
+          job: job,
+          logs: logs.map(l => l.line),
+          artifacts: artifactsWithUrl
+        }).catch(err => {
+          console.error("Email failed:", err);
+        });
       }
     }
 
@@ -613,6 +643,7 @@ router.patch("/:id/status", requireAgentAuth, async (req, res) => {
     );
 
     emitJobUpdate(jobId, { status: updated.status, jobId });
+    emitMailUpdate(jobId, { to: job.requester.email, status: updated.status, jobId })
     res.json(updated);
   } catch (err) {
     console.error(err);
