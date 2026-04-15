@@ -1,4 +1,5 @@
 import { Resend } from "resend";
+import 'dotenv/config'
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
@@ -20,7 +21,7 @@ export async function sendJobResultEmail({
         .join("\n");
 
     const { data, error } = await resend.emails.send({
-        from: process.env.EMAIL_FROM || "GridNode <GridNodeNotifications@cemlus.xyz>",
+        from: process.env.EMAIL_FROM || "<GridNode <notifications@domain.com>",
         to,
         subject: `Job ${job.id} ${job.status}`,
         text: `
