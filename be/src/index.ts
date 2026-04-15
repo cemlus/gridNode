@@ -7,6 +7,8 @@ import { auth } from "./lib/auth";
 import router from "./router";
 import { initSocket } from "./sockets";
 import { startSweeper, stopSweeper } from "./lib/sweeper";
+import { emailWorker } from "./queues/email.worker";
+import { connection as redisConnection } from "./queues/connection";
 
 const app = express();
 const server = http.createServer(app);
@@ -43,14 +45,17 @@ server.listen(3005, () => {
   startSweeper();
 });
 
-process.on("SIGTERM", () => {
+process.on("SIGTERM", async () => {
   console.log("SIGTERM received — shutting down");
   stopSweeper();
+  await emailWorker.close();
+  redisConnection.quit();
   server.close(() => process.exit(0));
 })
 
-process.on("SIGINT", () => {
+process.on("SIGINT", async () => {
   stopSweeper();
+  await emailWorker.close();
+  redisConnection.quit();
   server.close(() => process.exit(0));
-
 })

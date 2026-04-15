@@ -16,11 +16,11 @@ export async function sendJobResultEmail({
     const logPreview = logs.slice(-20).join("\n");
 
     const artifactLinks = artifacts
-        .map(a => `- ${a.fileName}: ${a.downloadUrl}`)
+        .map(a => `- ${a.filename}: ${a.downloadUrl}`)
         .join("\n");
 
-    await resend.emails.send({
-        from: "GridNode <siddhantbhardwaj47@gmail.com>",
+    const { data, error } = await resend.emails.send({
+        from: process.env.EMAIL_FROM || "GridNode <GridNodeNotifications@cemlus.xyz>",
         to,
         subject: `Job ${job.id} ${job.status}`,
         text: `
@@ -34,7 +34,15 @@ ${logPreview}
 --- Artifacts ---
 ${artifactLinks}
 
-View full job: https://yourfrontend/jobs/${job.id}
+View full job: ${process.env.FRONTEND_URL || "http://localhost:3000"}/jobs/${job.id}
     `,
     });
+
+    if (error) {
+        console.error("[Resend] API Error:", error);
+        throw new Error(`Resend Error: ${error.message}`);
+    }
+
+    console.log("[Resend] Email sent successfully:", data?.id);
+
 }

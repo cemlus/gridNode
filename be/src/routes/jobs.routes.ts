@@ -9,6 +9,8 @@ import { canViewJob, canStopJob, resolveStopTargetStatus } from "../lib/jobAcces
 import { emitLog, emitJobUpdate, emitMailUpdate } from "../sockets";
 import { generateGetUrl, generatePutUrl } from "../lib/s3";
 import { sendJobResultEmail } from "../lib/email";
+import { emailQueue } from "../queues/email.queue";
+import { error } from "console";
 
 const router = Router();
 
@@ -587,26 +589,7 @@ router.patch("/:id/status", requireAgentAuth, async (req, res) => {
         where: { id: updated.machineId },
         select: { id: true, trustScore: true }
       });
-      const [logs, artifacts] = await Promise.all([
-        prisma.jobLog.findMany({
-          where: {
-            jobId: job.id
-          },
-          orderBy: {
-            createdAt: 'desc'
-          },
-          take: 100
-        }),
-        prisma.artifact.findMany({
-          where: { jobId: job.id },
-        }),
-      ])
-      const artifactsWithUrl = await Promise.all(
-        artifacts.map(async (a) => ({
-          ...a,
-          downloadUrl: await generateGetUrl(a.id)
-        }))
-      )
+      
       if (machine) {
         if (status === JobStatus.completed) {
           await prisma.machine.update({
@@ -624,15 +607,19 @@ router.patch("/:id/status", requireAgentAuth, async (req, res) => {
             }
           });
         }
-        await sendJobResultEmail({
-          to: job.requester.email,
-          job: job,
-          logs: logs.map(l => l.line),
-          artifacts: artifactsWithUrl
-        }).catch(err => {
-          console.error("Email failed:", err);
-        });
       }
+
+      // enqueue the email job asynchronously
+      await emailQueue.add("send-result-email", {
+        jobId: job.id,
+        requesterEmail: job.requester.email,
+        status: status
+      }).then(() => {
+        console.log("[JOB] The email was appended to the queue");
+      }).catch((err) => {
+        console.error("[JOB] Email wasn't queued")
+      })
+      ;
     }
 
     await appendJobEvent(
@@ -643,7 +630,6 @@ router.patch("/:id/status", requireAgentAuth, async (req, res) => {
     );
 
     emitJobUpdate(jobId, { status: updated.status, jobId });
-    emitMailUpdate(jobId, { to: job.requester.email, status: updated.status, jobId })
     res.json(updated);
   } catch (err) {
     console.error(err);
