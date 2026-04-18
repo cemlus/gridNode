@@ -119,6 +119,7 @@ model Machine {
   id               String    @id @default(cuid())
   ownerId          String
   userKey          String?   // The user key used to register this machine
+  hardwareId       String?   // Unique fingerprint of the physical machine
   cpuTotal         Int
   memoryTotal      Int
   gpuTotal         Int

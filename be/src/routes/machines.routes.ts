@@ -13,7 +13,8 @@ router.get("/", requireAuth, async (req, res) => {
   try {
     const user = (req as any).user;
     const all = String(req.query.all) === "true";
-    const where = all ? {} : { ownerId: user.id };
+    const where: Prisma.MachineWhereInput = all ? {} : { ownerId: user.id };
+
     const machines = await prisma.machine.findMany({
       where,
       orderBy: { createdAt: "desc" },
@@ -34,10 +35,9 @@ router.post("/register", async (req, res) => {
       ram_gb, 
       gpu, 
       disk_free_gb,
-      userKey
+      userKey,
+      hardware_id
     } = req.body;
-
-    // console.log(req.body)
 
     if (!agent_token) {
       return res.status(400).json({ error: "agent_token is required" });
@@ -53,34 +53,53 @@ router.post("/register", async (req, res) => {
     }
 
     const cpuTotal = cpu_cores || 0;
-    const memoryTotal = Math.ceil((ram_gb || 0) * 1024); // GB to MB, round up to avoid underreporting
+    const memoryTotal = Math.ceil((ram_gb || 0) * 1024);
     
-    // Parse GPU info if provided
     let gpuTotal = 0;
     let gpuVendor = null;
     let gpuMemoryTotal = 0;
 
-    // console.log(gpu)
-    // console.log(typeof gpu)
-
     if (gpu && typeof gpu === "object") {
-      gpuTotal = 1 || 0;
+      gpuTotal = 1;
       gpuVendor = (gpu.name.split(' ')[0].toLowerCase() as GpuVendor) || null;
       gpuMemoryTotal = Math.ceil(gpu.vram_total_mb || 0);
     }
 
-    const machine = await prisma.machine.create({
-      data: {
-        ownerId: user.id,
-        userKey: userKey, // Link the user's registration key to this machine
-        cpuTotal,
-        memoryTotal,
-        gpuTotal,
-        gpuVendor,
-        gpuMemoryTotal: gpuMemoryTotal || null,
-        status: "idle",
-      },
+    // Persistent Machine ID Logic:
+    // Check if this user already has this machine registered via hardware_id
+    let machine = await prisma.machine.findFirst({
+      where: { ownerId: user.id, hardwareId: hardware_id }
     });
+
+    const updateData = {
+      cpuTotal,
+      memoryTotal,
+      gpuTotal,
+      gpuVendor,
+      gpuMemoryTotal: gpuMemoryTotal || null,
+      status: "idle", // Reset to idle upon registration/startup
+      lastHeartbeatAt: new Date()
+    };
+
+    if (machine) {
+      // Reconnecting existing hardware
+      machine = await prisma.machine.update({
+        where: { id: machine.id },
+        data: updateData
+      });
+      console.log(`[Register] Reconnected persistent machine: ${machine.id}`);
+    } else {
+      // New hardware
+      machine = await prisma.machine.create({
+        data: {
+          ownerId: user.id,
+          userKey: userKey,
+          hardwareId: hardware_id,
+          ...updateData
+        },
+      });
+      console.log(`[Register] Created new persistent machine: ${machine.id}`);
+    }
 
     const plainToken = generateSessionToken();
     const tokenHash = hashToken(plainToken);
@@ -95,7 +114,7 @@ router.post("/register", async (req, res) => {
 
     res.status(201).json({
       machine_id: machine.id,
-      agent_token: plainToken, // Return the long-lived session token
+      agent_token: plainToken,
     });
   } catch (err) {
     console.error(err);
@@ -122,10 +141,11 @@ router.post("/:id/heartbeat", requireAgentAuth, async (req, res) => {
 
     console.log(`[heartbeat] machine=${id} status=${status} preemptedJob=${preemptedJob?.id ?? "none"} reclaim=${!!preemptedJob}`);
 
-    const updateData: any = { lastHeartbeatAt: now };
-    if (status === "running" || status === "idle") {
-      updateData.status = status;
-    }
+    // If an agent is heartbeating, the machine is definitely not offline anymore.
+    const updateData: any = { 
+      lastHeartbeatAt: now,
+      status: (status === "running" || status === "idle") ? status : "idle"
+    };
 
     await prisma.$transaction([
       prisma.agentSession.update({
@@ -179,7 +199,7 @@ router.post("/:id/reclaim", requireAuth, async (req, res) => {
     console.log(`[Reclaim] Found ${jobs.length} jobs to preempt:`, jobs.map(j => `ID=${j.id} Status=${j.status}`));
 
     await prisma.$transaction(async (tx) => {
-      const updateResult = await tx.job.updateMany({
+      await tx.job.updateMany({
         where: { machineId, status: { in: active } },
         data: {
           status: JobStatus.preempted,
@@ -187,9 +207,10 @@ router.post("/:id/reclaim", requireAuth, async (req, res) => {
           // The agent will report 'idle' in its next heartbeat, and we can cleanup then.
         },
       });
-      
-      console.log(`[Reclaim] Successfully updated ${updateResult.count} jobs to preempted status.`);
 
+      // No longer setting machine status to 'reclaimed'. 
+      // The agent receiving reclaim=true will exit, and the machine will naturally time out to 'offline'.
+      
       for (const j of jobs) {
         const eventData: Prisma.JobEventUncheckedCreateInput = {
           jobId: j.id,

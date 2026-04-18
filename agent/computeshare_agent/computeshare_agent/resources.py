@@ -2,10 +2,20 @@
 
 import psutil
 import subprocess
+import uuid
+import platform
+import hashlib
 
 
 CPU_RESERVE_CORES = 1       # always leave 1 core for the OS
 RAM_RESERVE_GB   = 1.5      # always leave 1.5 GB for the OS + agent
+
+
+def get_hardware_id():
+    # uuid.getnode() gets the MAC address. 
+    # Combined with OS info to ensure cross-platform uniqueness
+    raw_id = f"{uuid.getnode()}-{platform.system()}-{platform.machine()}"
+    return hashlib.sha256(raw_id.encode()).hexdigest()
 
 
 def get_cpu():
@@ -64,6 +74,7 @@ def get_disk():
 
 def snapshot():
     return {
+        "hardware_id": get_hardware_id(),
         "cpu": get_cpu(),
         "ram": get_ram(),
         "gpu": get_gpu(),

@@ -173,10 +173,11 @@ def heartbeat_loop():
             data = resp.json()
 
             # backend can signal reclaim at any time via heartbeat response
-            if data.get("reclaim") and _current_container:
-                print("\n  [RECLAIM] Owner requested machine back — stopping container")
+            if data.get("reclaim"):
+                print("\n  [RECLAIM] Owner requested remote stop — terminating agent")
                 _reclaim_flag.set()
-                docker_runner.stop_container(_current_container)
+                # Trigger the graceful shutdown logic we built earlier
+                handle_shutdown(signal.SIGTERM, None)
 
         except Exception as e:
             print(f"  [WARN] Heartbeat failed: {e}")
