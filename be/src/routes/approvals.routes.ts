@@ -112,8 +112,8 @@ router.post("/:approvalId/reject", requireAuth, async (req, res) => {
     if (approval.status !== ApprovalStatus.pending) {
       return res.status(400).json({ error: "Approval is not pending" });
     }
-    if (approval.job.status !== JobStatus.pending_approval) {
-      return res.status(400).json({ error: "Job is not awaiting approval" });
+    if (approval.job.status !== JobStatus.pending_approval && approval.job.status !== JobStatus.preempted) {
+      return res.status(400).json({ error: "Job is not awaiting approval or preempted" });
     }
     // Check: only the job's provider can reject
     if (approval.job.providerId !== user.id) {

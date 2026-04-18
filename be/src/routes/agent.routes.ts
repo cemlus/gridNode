@@ -20,6 +20,11 @@ function parseGpuVendor(name: string): GpuVendor | null {
 router.get("/jobs/next", requireAgentAuth, async (req, res) => {
   try {
     const agentSession = (req as any).agentSession;
+    const machine = agentSession.machine;
+
+    if (machine.status === "reclaimed") {
+      return res.status(204).end();
+    }
     
     console.log(`[Polling] Agent requesting next job for machineId: ${agentSession.machineId}`);
 

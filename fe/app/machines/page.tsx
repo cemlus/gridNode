@@ -203,7 +203,7 @@ export default function MachinesPage() {
                   <div className="flex items-center justify-between">
                     <CardTitle className="text-base flex items-center">
                       <Monitor className="mr-2 h-4 w-4" />
-                      {machine.id.slice(0, 8)}...
+                      {machine.id}
                     </CardTitle>
                     <MachineStatusBadge lastHeartbeatAt={machine.lastHeartbeatAt} status={machine.status} />
                   </div>
