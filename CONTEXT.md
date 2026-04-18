@@ -237,7 +237,7 @@ Heartbeat:
 
 - posts to `/api/machines/:id/heartbeat`
 - backend can signal reclaim
-- if reclaim is seen while a container is running, the agent stops the container and reports preemption
+- if reclaim is seen, the agent initiates a full graceful shutdown (stopping any running container, cleaning workspaces) and terminates itself completely.
 
 ### Workspace layout
 
@@ -301,7 +301,7 @@ Important behavior:
 
 - CPU-only jobs strictly use the `runsc` **gVisor** runtime for microVM kernel-level protection.
 - GPU jobs use plain `runc` to allow hardware passthrough.
-- All jobs execute with completely air-gapped networking (`--network none`) and strict security options to prevent data exfiltration or malicious breakouts.
+- Jobs execute with completely air-gapped networking (`--network none`) to prevent data exfiltration, with the exception of `server_run` jobs which use `--network bridge` to allow access.
 - dependency installation uses repo `requirements.txt` if present, building into an ephemeral container before the main execution.
 
 ## Backend Behavior in Detail

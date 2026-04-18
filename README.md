@@ -15,7 +15,7 @@ This repository contains the full stack:
 2. The backend uses a **Best Fit (Bin Packing)** algorithm combined with a **Trust Score** system to match that job to the most suitable idle machine, and routes it to the provider for approval.
 3. The provider reviews pending work and approves or rejects it.
 4. The provider's local `computeshare-agent` polls for assigned jobs.
-5. The agent prepares a workspace, safely runs the job in Docker (using **gVisor** for CPU jobs and `runc` for GPU jobs, both completely air-gapped with `--network none`), streams logs, and uploads artifacts via direct S3 presigned URLs.
+5. The agent prepares a workspace, safely runs the job in Docker (using **gVisor** for CPU jobs and `runc` for GPU jobs), streams logs, and uploads artifacts. Network access is disabled (`--network none`) except for server jobs (`--network bridge`).
 6. The frontend shows job state, live logs, approvals, machines, and output artifacts.
 
 ## Repository Overview
@@ -60,9 +60,9 @@ The repo already contains working code for:
 - Backend:
   Source of truth for users, machines, approvals, jobs, logs, and artifacts. Responsible for **Best Fit Bin-Packing** matchmaking, Trust Score management, background sweepers for dead nodes, and generating AWS S3 presigned URLs for artifact brokering.
 - Agent:
-  Execution plane running on the provider's machine. Handles secure sandboxed execution using **gVisor (`runsc`)** for microVM kernel-level protection on CPU jobs and `runc` for GPU jobs, along with workspace preparation and data ingestion (including Kaggle datasets and GitHub repositories).
+  Execution plane running on the provider's machine. Handles secure sandboxed execution using **gVisor (`runsc`)** for microVM kernel-level protection on CPU jobs and `runc` for GPU jobs, along with workspace preparation and data ingestion (including Kaggle datasets and GitHub repositories). Reclaims initiate a full graceful shutdown of the agent.
 - Docker images:
-  Workload runtimes stored under `docker/`. Containers run isolated without network access (`--network none`) to prevent malicious activity.
+  Workload runtimes stored under `docker/`. Containers typically run isolated without network access (`--network none`) to prevent malicious activity, except when explicit access is required (like `server_run` jobs).
 
 At a high level, the backend owns coordination and state, while the agent strictly performs secure execution on provider hardware.
 
