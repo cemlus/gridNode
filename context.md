@@ -124,8 +124,8 @@ Backend:
 Behavior:
 
 - Requester submits job type, repo URL, `command`, optional Kaggle dataset URL, and tier-based resource requirements.
-- Backend validates enums.
-- Backend does automatic machine matchmaking via `Machine` capacity fields.
+- Backend validates enums and calculates effective resource minimums.
+- Backend matches the job to an idle machine using a **Best Fit (Bin Packing)** algorithm. It sorts by least resource waste (CPU/RAM difference), and uses **Trust Score** as a tie-breaker if waste is within 5%.
 - Backend creates the job with:
   - `status = pending_approval`
   - linked `machineId`
@@ -299,12 +299,19 @@ Important behavior:
 
 Important behavior:
 
-- CPU-only jobs prefer `runsc` gVisor runtime
-- GPU jobs use plain `runc`
-- notebook image/network comes from `IMAGE_REGISTRY`
-- dependency installation uses repo `requirements.txt` if present
+- CPU-only jobs strictly use the `runsc` **gVisor** runtime for microVM kernel-level protection.
+- GPU jobs use plain `runc` to allow hardware passthrough.
+- All jobs execute with completely air-gapped networking (`--network none`) and strict security options to prevent data exfiltration or malicious breakouts.
+- dependency installation uses repo `requirements.txt` if present, building into an ephemeral container before the main execution.
 
 ## Backend Behavior in Detail
+
+### Sweeper Process
+
+The backend runs a periodic `sweeper` to manage machine states:
+- It detects machines that haven't sent a heartbeat for over 3 minutes.
+- It transitions them to `offline`.
+- It forcibly fails any active jobs on those machines and applies a significant Trust Score penalty (-15.0) to penalize unreliable nodes.
 
 ### Auth split
 
